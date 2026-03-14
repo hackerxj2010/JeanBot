@@ -1,0 +1,9 @@
+{
+  "completed_steps": [
+    "Scaffold FastAPI Project",
+    "Implement CRUD Logic"
+  ],
+  "mission_title": "Build FastAPI Todo CRUD",
+  "pending_steps": [],
+  "running_steps": []
+}

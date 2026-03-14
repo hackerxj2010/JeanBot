@@ -19,7 +19,9 @@ export const capabilities = [
   "learning",
   "multimodality",
   "finance",
-  "orchestration"
+  "orchestration",
+  "synthesis",
+  "verification"
 ] as const;
 
 export type Capability = (typeof capabilities)[number];

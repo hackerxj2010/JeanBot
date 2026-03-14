@@ -1,0 +1,10 @@
+{
+  "data": {
+    "attempt": 1,
+    "capability": "software-development",
+    "mission_id": "py-mission-da1e08ceb954"
+  },
+  "entity_id": "step-crud",
+  "event": "mission.step.attempt.started",
+  "service": "agent-orchestrator"
+}

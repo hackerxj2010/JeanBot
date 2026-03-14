@@ -576,5 +576,101 @@ export const createToolCatalog = (): ToolDescriptor[] => [
     capabilityHints: ["automation", "heartbeat", "project-management"],
     tags: ["heartbeat", "automation", "summary"],
     risk: "low"
+  },
+  {
+    id: "synthesis.tool.generate",
+    name: "Autonomous tool synthesizer",
+    kind: "policy",
+    description: "Generate and register new tool logic dynamically based on mission requirements.",
+    permissions: ["execute", "write"],
+    requiresApproval: true,
+    supportedActions: ["synthesize"],
+    capabilityHints: ["synthesis", "software-development", "orchestration"],
+    tags: ["synthesis", "dynamic", "meta"],
+    risk: "critical"
+  },
+  {
+    id: "filesystem.workspace.recursive-search",
+    name: "Overpowered workspace search",
+    kind: "filesystem",
+    description: "Perform recursive regex search across all files in the workspace with semantic filtering.",
+    permissions: ["read"],
+    requiresApproval: false,
+    supportedActions: ["search"],
+    capabilityHints: ["filesystem", "research", "software-development"],
+    tags: ["search", "regex", "recursive"],
+    risk: "medium"
+  },
+  {
+    id: "git.diff",
+    name: "Git diff reader",
+    kind: "filesystem",
+    description: "Read the current workspace git diff or diff against a target commit.",
+    permissions: ["read"],
+    requiresApproval: false,
+    supportedActions: ["diff"],
+    capabilityHints: ["filesystem", "software-development", "orchestration"],
+    tags: ["git", "diff", "version-control"],
+    risk: "low"
+  },
+  {
+    id: "git.log",
+    name: "Git history reader",
+    kind: "filesystem",
+    description: "Read the recent git commit history for the workspace.",
+    permissions: ["read"],
+    requiresApproval: false,
+    supportedActions: ["log"],
+    capabilityHints: ["filesystem", "software-development", "reasoning"],
+    tags: ["git", "log", "history"],
+    risk: "low"
+  },
+  {
+    id: "git.commit",
+    name: "Git committer",
+    kind: "filesystem",
+    description: "Stage all changes and create a new git commit with a message.",
+    permissions: ["write"],
+    requiresApproval: true,
+    supportedActions: ["commit"],
+    capabilityHints: ["software-development", "orchestration"],
+    tags: ["git", "commit", "version-control"],
+    risk: "medium"
+  },
+  {
+    id: "git.push",
+    name: "Git pusher",
+    kind: "filesystem",
+    description: "Push local commits to a remote git repository.",
+    permissions: ["write"],
+    requiresApproval: true,
+    supportedActions: ["push"],
+    capabilityHints: ["software-development", "orchestration"],
+    tags: ["git", "push", "remote"],
+    risk: "high"
+  },
+  {
+    id: "codeintel.map",
+    name: "Codebase mapper",
+    kind: "filesystem",
+    description: "Build a map of all symbols (classes, functions, etc.) in the codebase.",
+    permissions: ["read"],
+    requiresApproval: false,
+    supportedActions: ["map"],
+    capabilityHints: ["software-development", "planning", "reasoning"],
+    tags: ["code", "symbols", "intel"],
+    risk: "low"
+  },
+  {
+    id: "codeintel.definition",
+    name: "Definition finder",
+    kind: "filesystem",
+    description: "Find the definition site of a specific symbol in the codebase.",
+    permissions: ["read"],
+    requiresApproval: false,
+    supportedActions: ["find"],
+    capabilityHints: ["software-development", "reasoning"],
+    tags: ["code", "definition", "intel"],
+    risk: "low"
   }
 ];

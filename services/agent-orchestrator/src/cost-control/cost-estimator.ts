@@ -21,7 +21,9 @@ const costByCapability: Record<Capability, number> = {
   learning: 0.01,
   multimodality: 0.03,
   finance: 0.05,
-  orchestration: 0.03
+  orchestration: 0.03,
+  synthesis: 0.08,
+  verification: 0.02
 };
 
 export const estimatePlanCost = (plan: Pick<MissionPlan, "steps">) => {

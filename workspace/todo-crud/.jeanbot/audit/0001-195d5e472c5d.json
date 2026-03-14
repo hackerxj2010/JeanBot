@@ -1,0 +1,11 @@
+{
+  "data": {
+    "batch_size": 1,
+    "step_ids": [
+      "step-scaffold"
+    ]
+  },
+  "entity_id": "py-mission-da1e08ceb954",
+  "event": "mission.batch.started",
+  "service": "agent-orchestrator"
+}

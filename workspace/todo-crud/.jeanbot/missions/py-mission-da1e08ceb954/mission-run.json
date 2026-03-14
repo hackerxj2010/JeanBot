@@ -1,0 +1,222 @@
+{
+  "artifact_paths": [
+    "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/mission-report.md",
+    "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/step-step-crud.md",
+    "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/step-step-scaffold.md"
+  ],
+  "audit_summary": {
+    "events": {
+      "mission.batch.completed": 2,
+      "mission.batch.started": 2,
+      "mission.step.attempt.assessed": 2,
+      "mission.step.attempt.started": 2,
+      "mission.step.completed": 2,
+      "mission.step.policy.checked": 2,
+      "mission.step.started": 2
+    },
+    "total_records": 14
+  },
+  "memory_summary": {
+    "memory_count": 2,
+    "top_tags": [
+      [
+        "software-development",
+        2
+      ],
+      [
+        "execution",
+        2
+      ],
+      [
+        "coder",
+        2
+      ],
+      [
+        "none",
+        2
+      ]
+    ],
+    "workspace_id": "todo-crud-workspace"
+  },
+  "mission": {
+    "id": "py-mission-da1e08ceb954",
+    "objective": "Build a simple FastAPI CRUD for Todo items with unit tests. Use a local JSON file for persistence.",
+    "risk": "low",
+    "title": "Build FastAPI Todo CRUD",
+    "workspace_id": "todo-crud-workspace"
+  },
+  "plan_version": 1,
+  "result": {
+    "artifacts": [
+      {
+        "created_at": "2026-03-14T16:55:00.991313+00:00",
+        "id": "9ec926ab-e884-4805-9db4-990566840ad3",
+        "kind": "log",
+        "metadata": {
+          "failure_class": "none",
+          "overall_score": 0.7766666666666667,
+          "run_id": "run-step-scaffold-1",
+          "step_id": "step-scaffold",
+          "tool_calls": 3
+        },
+        "path": "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/step-step-scaffold.md",
+        "title": "Step report step-scaffold"
+      },
+      {
+        "created_at": "2026-03-14T16:55:01.004400+00:00",
+        "id": "37198c75-4b46-4d32-8e23-7ea79574fb37",
+        "kind": "log",
+        "metadata": {
+          "failure_class": "none",
+          "overall_score": 0.7773333333333333,
+          "run_id": "run-step-crud-1",
+          "step_id": "step-crud",
+          "tool_calls": 3
+        },
+        "path": "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/step-step-crud.md",
+        "title": "Step report step-crud"
+      },
+      {
+        "created_at": "2026-03-14T16:55:01.009244+00:00",
+        "id": "ff693829-6135-4c3e-ae04-ef72b7054746",
+        "kind": "report",
+        "metadata": {
+          "mission_id": "py-mission-da1e08ceb954",
+          "step_count": 2
+        },
+        "path": "workspace/todo-crud/.jeanbot/artifacts/py-mission-da1e08ceb954/mission-report.md",
+        "title": "Mission report"
+      }
+    ],
+    "decision_log": [],
+    "execution_mode": "local",
+    "finished_at": "2026-03-14T16:55:01.009278+00:00",
+    "gaps": [],
+    "memory_updates": [
+      "Scaffold FastAPI Project: Scaffold FastAPI Project verified after attempt 1. Tools=read_file,write_file,terminal_exec. Verification=software-development completed on attempt 1",
+      "Implement CRUD Logic: Implement CRUD Logic verified after attempt 1. Tools=read_file,write_file,terminal_exec. Verification=software-development completed on attempt 1"
+    ],
+    "metrics": {
+      "average_score": 0.78,
+      "completed_steps": 2,
+      "decisions_logged": 0,
+      "failed_steps": 0,
+      "total_artifacts": 3,
+      "total_steps": 2
+    },
+    "mission_id": "py-mission-da1e08ceb954",
+    "outputs": {
+      "step-crud": {
+        "assignee": null,
+        "payload_preview": "[ { \"provider\": \"ollama\", \"mode\": \"synthetic\", \"message\": \"[coder] Completed step 'Implement CRUD Logic' using capability 'software-development' on attempt 1. Description: Implement GET, POST, PUT, DELETE endpoints for Todos.\" } ]",
+        "result": {
+          "finalText": "[coder] Completed step 'Implement CRUD Logic' using capability 'software-development' on attempt 1. Description: Implement GET, POST, PUT, DELETE endpoints for Todos.",
+          "providerResponses": [
+            {
+              "message": "[coder] Completed step 'Implement CRUD Logic' using capability 'software-development' on attempt 1. Description: Implement GET, POST, PUT, DELETE endpoints for Todos.",
+              "mode": "synthetic",
+              "provider": "ollama"
+            }
+          ],
+          "toolCalls": [
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "read_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "write_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "terminal_exec"
+            }
+          ],
+          "verification": {
+            "passed": true,
+            "reason": "software-development completed on attempt 1"
+          }
+        },
+        "run_id": "run-step-crud-1"
+      },
+      "step-scaffold": {
+        "assignee": null,
+        "payload_preview": "[ { \"provider\": \"ollama\", \"mode\": \"synthetic\", \"message\": \"[coder] Completed step 'Scaffold FastAPI Project' using capability 'software-development' on attempt 1. Description: Create main.py and requirements.txt for FastAPI.\" } ]",
+        "result": {
+          "finalText": "[coder] Completed step 'Scaffold FastAPI Project' using capability 'software-development' on attempt 1. Description: Create main.py and requirements.txt for FastAPI.",
+          "providerResponses": [
+            {
+              "message": "[coder] Completed step 'Scaffold FastAPI Project' using capability 'software-development' on attempt 1. Description: Create main.py and requirements.txt for FastAPI.",
+              "mode": "synthetic",
+              "provider": "ollama"
+            }
+          ],
+          "toolCalls": [
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "read_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "write_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "terminal_exec"
+            }
+          ],
+          "verification": {
+            "passed": true,
+            "reason": "software-development completed on attempt 1"
+          }
+        },
+        "run_id": "run-step-scaffold-1"
+      }
+    },
+    "started_at": "2026-03-14T16:55:00.978880+00:00",
+    "status": "completed",
+    "step_reports": [
+      {
+        "attempts": 1,
+        "diagnostics": {
+          "coverage_score": 1.0,
+          "escalation_required": false,
+          "evidence_score": 0.33,
+          "failure_class": "none",
+          "missing_signals": [],
+          "overall_score": 0.7766666666666667,
+          "recommended_actions": [],
+          "retryable": false,
+          "verification_score": 1.0
+        },
+        "started_at": "2026-03-14T16:55:00.982711+00:00",
+        "step_id": "step-scaffold",
+        "summary": "Scaffold FastAPI Project verified after attempt 1"
+      },
+      {
+        "attempts": 1,
+        "diagnostics": {
+          "coverage_score": 1.0,
+          "escalation_required": false,
+          "evidence_score": 0.332,
+          "failure_class": "none",
+          "missing_signals": [],
+          "overall_score": 0.7773333333333333,
+          "recommended_actions": [],
+          "retryable": false,
+          "verification_score": 1.0
+        },
+        "started_at": "2026-03-14T16:55:00.998426+00:00",
+        "step_id": "step-crud",
+        "summary": "Implement CRUD Logic verified after attempt 1"
+      }
+    ],
+    "verification_summary": "Verification: 2/2 steps passed. Average score: 0.78"
+  }
+}

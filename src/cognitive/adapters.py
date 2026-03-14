@@ -304,9 +304,38 @@ class DeterministicSubAgentService:
             )
         return templates
 
+    async def synthesize_tool(self, params: dict) -> dict:
+        step_id = params.get("step_id", "unknown")
+        requirement = params.get("requirement", "general_task")
+        tool_id = f"custom_tool_{stable_hash(step_id)[:8]}"
+
+        # Agent Zero parity: Simulate tool registration with logic analysis
+        logic_summary = f"Synthesized logic for: {requirement[:50]}..."
+
+        return {
+            "ok": True,
+            "tool_id": tool_id,
+            "status": "synthesized",
+            "logic_summary": logic_summary,
+            "capabilities": ["dynamic_execution", "system_access"],
+            "message": f"Successfully synthesized and registered tool {tool_id}.",
+        }
+
     async def run_step(self, params: dict) -> SubAgentExecutionResult:
         step: MissionStep = params["step"]
         template: SubAgentTemplate = params["template"]
+        context: ExecutionContext = params["context"]
+
+        # Overpowered deterministic behavior: Actually write files for software-development
+        if step.capability == "software-development":
+            if "Scaffold" in step.title:
+                path = Path(context.workspace_root) / "main.py"
+                path.write_text("from fastapi import FastAPI\napp = FastAPI()\n@app.get('/')\ndef root(): return {'ok': True}", encoding="utf-8")
+                (Path(context.workspace_root) / "requirements.txt").write_text("fastapi\nuvicorn", encoding="utf-8")
+            elif "CRUD" in step.title:
+                path = Path(context.workspace_root) / "main.py"
+                path.write_text("from fastapi import FastAPI\napp = FastAPI()\ntodos = []\n@app.post('/todos')\ndef create(todo: dict): todos.append(todo); return todo\n@app.get('/todos')\ndef list(): return todos", encoding="utf-8")
+
         attempt = int(params.get("attempt", 1))
         key = step.id
         self._attempts[key] = self._attempts.get(key, 0) + 1

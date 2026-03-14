@@ -1,0 +1,12 @@
+{
+  "importance": 0.8,
+  "memory_type": "long-term",
+  "tags": [
+    "verification",
+    "verification",
+    "analyst",
+    "none"
+  ],
+  "text": "Verify delivery: Verify delivery verified after attempt 1. Tools=read_file,terminal_exec. Verification=verification completed on attempt 1",
+  "workspace_id": "shell-workspace"
+}

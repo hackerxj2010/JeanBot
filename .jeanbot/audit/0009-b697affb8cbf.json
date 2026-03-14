@@ -1,0 +1,10 @@
+{
+  "data": {
+    "capability": "software-development",
+    "mission_id": "py-mission-280827da2c14",
+    "stage": "execution"
+  },
+  "entity_id": "step-002",
+  "event": "mission.step.started",
+  "service": "agent-orchestrator"
+}

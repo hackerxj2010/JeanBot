@@ -488,6 +488,39 @@ export class FileService {
     return result.absolutePath;
   }
 
+  /**
+   * Overpowered Recursive Search
+   * Implementation for filesystem.workspace.recursive-search
+   */
+  async recursiveSearch(
+    workspaceRoot: string,
+    query: string,
+    options: { regex?: boolean; extension?: string | undefined } = {}
+  ) {
+    const scan = await this.scanWorkspace(workspaceRoot, { recursive: true });
+    const results: Array<{ path: string; lines: string[] }> = [];
+
+    for (const entry of scan) {
+      if (entry.type !== "file") continue;
+      if (options.extension && !entry.relativePath.endsWith(options.extension)) continue;
+
+      const content = await this.readWorkspaceFile(workspaceRoot, entry.relativePath);
+      const lines = content.split("\n");
+      const matchedLines = lines.filter((line) =>
+        options.regex ? new RegExp(query, "i").test(line) : line.toLowerCase().includes(query.toLowerCase())
+      );
+
+      if (matchedLines.length > 0) {
+        results.push({
+          path: entry.relativePath,
+          lines: matchedLines.slice(0, 5) // Cap preview
+        });
+      }
+    }
+
+    return results;
+  }
+
   health(): ServiceHealth {
     return {
       name: "file-service",

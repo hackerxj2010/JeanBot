@@ -207,7 +207,9 @@ export class GatewayServices {
       learning: ["knowledge", "memory", "browser"],
       multimodality: ["filesystem", "browser"],
       finance: ["communication", "audit", "policy"],
-      orchestration: ["filesystem", "memory", "browser", "terminal", "knowledge"]
+      orchestration: ["filesystem", "memory", "browser", "terminal", "knowledge"],
+      synthesis: ["terminal", "filesystem", "policy"],
+      verification: ["terminal", "filesystem", "browser", "search", "knowledge"]
     };
 
     const allowedKinds = new Set(kindsByCapability[capability] ?? ["filesystem", "memory"]);

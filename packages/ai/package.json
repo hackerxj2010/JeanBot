@@ -6,7 +6,10 @@
   "dependencies": {
     "@jeanbot/model-router": "workspace:*",
     "@jeanbot/telemetry": "workspace:*",
-    "@jeanbot/types": "workspace:*"
+    "@jeanbot/types": "workspace:*",
+    "ai": "^3.0.0",
+    "@ai-sdk/anthropic": "^0.0.0",
+    "@ai-sdk/openai": "^0.0.0"
   },
   "exports": {
     ".": "./src/index.ts"

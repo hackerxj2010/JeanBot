@@ -218,6 +218,7 @@ class PolicyService(Protocol):
 class SubAgentService(Protocol):
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
     async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
+    async def synthesize_tool(self, params: dict) -> dict: ...
 
 
 class MissionExecutionIntelligence:
@@ -863,6 +864,22 @@ class MissionExecutor:
         template: SubAgentTemplate,
         context: ExecutionContext,
     ) -> StepOutcome:
+        # Agent Zero parity: Check if we need to synthesize tools before execution
+        if "synthesis" in step.capability.lower() or "custom" in step.capability.lower():
+            await self.audit_service.record(
+                "mission.tool.synthesis.requested",
+                step.id,
+                "agent-orchestrator",
+                {"mission_id": record.objective.id, "capability": step.capability},
+            )
+            synthesis_result = await self.sub_agent_service.synthesize_tool({
+                "mission_id": record.objective.id,
+                "step_id": step.id,
+                "requirement": step.description,
+            })
+            if synthesis_result.get("ok"):
+                template.tool_ids = (template.tool_ids or []) + [synthesis_result["tool_id"]]
+
         step_started_at = utc_now_iso()
         step.status = "running"
         

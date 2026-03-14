@@ -1,0 +1,34 @@
+{
+  "decision_log": [],
+  "id": "py-mission-da1e08ceb954",
+  "objective": "Build a simple FastAPI CRUD for Todo items with unit tests. Use a local JSON file for persistence.",
+  "plan_version": 1,
+  "replan_history": [],
+  "risk": "low",
+  "steps": [
+    {
+      "assignee": null,
+      "capability": "software-development",
+      "depends_on": [],
+      "description": "Create main.py and requirements.txt for FastAPI.",
+      "id": "step-scaffold",
+      "stage": "execution",
+      "status": "completed",
+      "title": "Scaffold FastAPI Project"
+    },
+    {
+      "assignee": null,
+      "capability": "software-development",
+      "depends_on": [
+        "step-scaffold"
+      ],
+      "description": "Implement GET, POST, PUT, DELETE endpoints for Todos.",
+      "id": "step-crud",
+      "stage": "execution",
+      "status": "completed",
+      "title": "Implement CRUD Logic"
+    }
+  ],
+  "title": "Build FastAPI Todo CRUD",
+  "workspace_id": "todo-crud-workspace"
+}
