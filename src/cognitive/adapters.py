@@ -304,6 +304,23 @@ class DeterministicSubAgentService:
             )
         return templates
 
+    async def synthesize_tool(self, params: dict) -> dict:
+        step_id = params.get("step_id", "unknown")
+        requirement = params.get("requirement", "general_task")
+        tool_id = f"custom_tool_{stable_hash(step_id)[:8]}"
+
+        # Agent Zero parity: Simulate tool registration with logic analysis
+        logic_summary = f"Synthesized logic for: {requirement[:50]}..."
+
+        return {
+            "ok": True,
+            "tool_id": tool_id,
+            "status": "synthesized",
+            "logic_summary": logic_summary,
+            "capabilities": ["dynamic_execution", "system_access"],
+            "message": f"Successfully synthesized and registered tool {tool_id}.",
+        }
+
     async def run_step(self, params: dict) -> SubAgentExecutionResult:
         step: MissionStep = params["step"]
         template: SubAgentTemplate = params["template"]

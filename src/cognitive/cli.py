@@ -27,10 +27,54 @@ def build_parser() -> argparse.ArgumentParser:
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
 
+    shell_parser = subparsers.add_parser("shell", help="Start an interactive mission shell")
+    shell_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+
     return parser
 
 
+async def run_shell(args: argparse.Namespace) -> dict:
+    from .service import MissionExecutorService
+    service = MissionExecutorService(workspace_root=args.workspace_root)
+    print("--- JeanBot Universal AI Employee Shell ---")
+    print(f"Workspace: {args.workspace_root}")
+    print("Type 'exit' to quit.")
+
+    while True:
+        try:
+            prompt = input("\njeanbot> ").strip()
+            if not prompt:
+                continue
+            if prompt.lower() in ("exit", "quit"):
+                break
+
+            payload = {
+                "workspace_id": "shell-workspace",
+                "title": f"Shell Mission: {prompt[:30]}...",
+                "objective": prompt,
+            }
+
+            print(f"[*] Planning and executing mission: {prompt}")
+            result = await service.execute_payload(payload)
+            print(f"[*] Mission {result.status}: {result.verification_summary}")
+
+            if result.artifacts:
+                print("[*] Artifacts generated:")
+                for artifact in result.artifacts:
+                    print(f"  - {artifact.title}: {artifact.path}")
+
+        except KeyboardInterrupt:
+            print("\nInterrupt received. Use 'exit' to quit.")
+        except Exception as e:
+            print(f"[!] Error: {e}")
+
+    return {"command": "shell", "status": "closed"}
+
+
 async def run_command(args: argparse.Namespace) -> dict:
+    if args.command == "shell":
+        return await run_shell(args)
+
     if args.command == "write-template":
         service = MissionExecutorService(workspace_root=".")
         path = service.write_payload_template(args.output)

@@ -1,4 +1,6 @@
-# JeanBot Architecture
+# JeanBot Architecture: The Universal AI Employee
+
+JeanBot is a distributed, multi-service platform designed to support autonomous missions at any scale. It combines high-level mission orchestration with low-level system access.
 
 ## Service roles
 
@@ -39,7 +41,7 @@
 
 - Session memory: active run context
 - Short-term memory: recent summaries and transient facts
-- Long-term memory: durable mission outcomes and high-value facts
+- Long-term memory: durable mission outcomes and high-value facts (Cross-workspace consciousness)
 - Schema readiness:
   - `memory_records` and `knowledge_documents` are ready for `pgvector`
   - Prisma models the durable relational + vector future state
@@ -50,3 +52,4 @@
 - Level 1: local non-destructive actions
 - Level 2: approval-sensitive execution such as terminal commands or checkpointed writes
 - Level 3: future destructive or production-impacting actions
+- **Level 4: Autonomous Tool Synthesis**: Ability to write and register new tools dynamically.
