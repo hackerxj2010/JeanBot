@@ -94,6 +94,12 @@ importers:
         specifier: ^5.10.0
         version: 5.10.0
 
+  packages/code-intel:
+    dependencies:
+      '@jeanbot/logger':
+        specifier: workspace:*
+        version: link:../logger
+
   packages/db:
     dependencies:
       '@prisma/client':
@@ -547,6 +553,15 @@ importers:
         specifier: workspace:*
         version: link:../../packages/types
 
+  services/git-service:
+    dependencies:
+      '@jeanbot/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+      '@jeanbot/types':
+        specifier: workspace:*
+        version: link:../../packages/types
+
   services/knowledge-service:
     dependencies:
       '@jeanbot/ai':
@@ -699,12 +714,18 @@ importers:
       '@jeanbot/browser-service':
         specifier: workspace:*
         version: link:../browser-service
+      '@jeanbot/code-intel':
+        specifier: workspace:*
+        version: link:../../packages/code-intel
       '@jeanbot/communication-service':
         specifier: workspace:*
         version: link:../communication-service
       '@jeanbot/file-service':
         specifier: workspace:*
         version: link:../file-service
+      '@jeanbot/git-service':
+        specifier: workspace:*
+        version: link:../git-service
       '@jeanbot/knowledge-service':
         specifier: workspace:*
         version: link:../knowledge-service

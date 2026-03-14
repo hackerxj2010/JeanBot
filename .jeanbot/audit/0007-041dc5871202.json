@@ -1,0 +1,11 @@
+{
+  "data": {
+    "completed_steps": [
+      "step-001"
+    ],
+    "remaining_steps": 2
+  },
+  "entity_id": "py-mission-280827da2c14",
+  "event": "mission.batch.completed",
+  "service": "agent-orchestrator"
+}

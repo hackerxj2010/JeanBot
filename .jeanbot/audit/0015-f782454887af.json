@@ -1,0 +1,11 @@
+{
+  "data": {
+    "batch_size": 1,
+    "step_ids": [
+      "step-003"
+    ]
+  },
+  "entity_id": "py-mission-280827da2c14",
+  "event": "mission.batch.started",
+  "service": "agent-orchestrator"
+}

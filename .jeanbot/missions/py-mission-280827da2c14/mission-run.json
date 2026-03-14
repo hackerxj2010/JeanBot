@@ -1,0 +1,302 @@
+{
+  "artifact_paths": [
+    ".jeanbot/artifacts/py-mission-280827da2c14/mission-report.md",
+    ".jeanbot/artifacts/py-mission-280827da2c14/step-step-001.md",
+    ".jeanbot/artifacts/py-mission-280827da2c14/step-step-002.md",
+    ".jeanbot/artifacts/py-mission-280827da2c14/step-step-003.md"
+  ],
+  "audit_summary": {
+    "events": {
+      "mission.batch.completed": 3,
+      "mission.batch.started": 3,
+      "mission.step.attempt.assessed": 3,
+      "mission.step.attempt.started": 3,
+      "mission.step.completed": 3,
+      "mission.step.policy.checked": 3,
+      "mission.step.started": 3
+    },
+    "total_records": 21
+  },
+  "memory_summary": {
+    "memory_count": 3,
+    "top_tags": [
+      [
+        "none",
+        3
+      ],
+      [
+        "execution",
+        2
+      ],
+      [
+        "verification",
+        2
+      ],
+      [
+        "research",
+        1
+      ],
+      [
+        "researcher",
+        1
+      ],
+      [
+        "software-development",
+        1
+      ],
+      [
+        "coder",
+        1
+      ],
+      [
+        "analyst",
+        1
+      ]
+    ],
+    "workspace_id": "shell-workspace"
+  },
+  "mission": {
+    "id": "py-mission-280827da2c14",
+    "objective": "Help me understand the current project structure",
+    "risk": "low",
+    "title": "Shell Mission: Help me understand the current...",
+    "workspace_id": "shell-workspace"
+  },
+  "plan_version": 1,
+  "result": {
+    "artifacts": [
+      {
+        "created_at": "2026-03-14T16:58:30.101048+00:00",
+        "id": "1b7ac345-58d5-480b-8b5d-bd0a86a3897f",
+        "kind": "log",
+        "metadata": {
+          "failure_class": "none",
+          "overall_score": 0.7919999999999999,
+          "run_id": "run-step-001-1",
+          "step_id": "step-001",
+          "tool_calls": 3
+        },
+        "path": ".jeanbot/artifacts/py-mission-280827da2c14/step-step-001.md",
+        "title": "Step report step-001"
+      },
+      {
+        "created_at": "2026-03-14T16:58:30.113421+00:00",
+        "id": "6891ff16-1b3c-4bc6-929f-e9f3608d3923",
+        "kind": "log",
+        "metadata": {
+          "failure_class": "none",
+          "overall_score": 0.7753333333333333,
+          "run_id": "run-step-002-1",
+          "step_id": "step-002",
+          "tool_calls": 3
+        },
+        "path": ".jeanbot/artifacts/py-mission-280827da2c14/step-step-002.md",
+        "title": "Step report step-002"
+      },
+      {
+        "created_at": "2026-03-14T16:58:30.124698+00:00",
+        "id": "2feb1dd7-d426-4b79-b4c6-92c17946668a",
+        "kind": "log",
+        "metadata": {
+          "failure_class": "none",
+          "overall_score": 0.7686666666666667,
+          "run_id": "run-step-003-1",
+          "step_id": "step-003",
+          "tool_calls": 2
+        },
+        "path": ".jeanbot/artifacts/py-mission-280827da2c14/step-step-003.md",
+        "title": "Step report step-003"
+      },
+      {
+        "created_at": "2026-03-14T16:58:30.129692+00:00",
+        "id": "7595c972-37df-465e-b91a-489d47330d4f",
+        "kind": "report",
+        "metadata": {
+          "mission_id": "py-mission-280827da2c14",
+          "step_count": 3
+        },
+        "path": ".jeanbot/artifacts/py-mission-280827da2c14/mission-report.md",
+        "title": "Mission report"
+      }
+    ],
+    "decision_log": [],
+    "execution_mode": "local",
+    "finished_at": "2026-03-14T16:58:30.129726+00:00",
+    "gaps": [],
+    "memory_updates": [
+      "Analyze objective: Analyze objective verified after attempt 1. Tools=web_search,browser_extract,read_file. Verification=research completed on attempt 1",
+      "Implement deliverable: Implement deliverable verified after attempt 1. Tools=read_file,write_file,terminal_exec. Verification=software-development completed on attempt 1",
+      "Verify delivery: Verify delivery verified after attempt 1. Tools=read_file,terminal_exec. Verification=verification completed on attempt 1"
+    ],
+    "metrics": {
+      "average_score": 0.78,
+      "completed_steps": 3,
+      "decisions_logged": 0,
+      "failed_steps": 0,
+      "total_artifacts": 4,
+      "total_steps": 3
+    },
+    "mission_id": "py-mission-280827da2c14",
+    "outputs": {
+      "step-001": {
+        "assignee": null,
+        "payload_preview": "[ { \"provider\": \"ollama\", \"mode\": \"synthetic\", \"message\": \"[researcher] Completed step 'Analyze objective' using capability 'research' on attempt 1. Description: Analyze objective and extract tasks: Help me understand the current project structure\" } ]",
+        "result": {
+          "finalText": "[researcher] Completed step 'Analyze objective' using capability 'research' on attempt 1. Description: Analyze objective and extract tasks: Help me understand the current project structure",
+          "providerResponses": [
+            {
+              "message": "[researcher] Completed step 'Analyze objective' using capability 'research' on attempt 1. Description: Analyze objective and extract tasks: Help me understand the current project structure",
+              "mode": "synthetic",
+              "provider": "ollama"
+            }
+          ],
+          "toolCalls": [
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "web_search"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "browser_extract"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "read_file"
+            }
+          ],
+          "verification": {
+            "passed": true,
+            "reason": "research completed on attempt 1"
+          }
+        },
+        "run_id": "run-step-001-1"
+      },
+      "step-002": {
+        "assignee": null,
+        "payload_preview": "[ { \"provider\": \"ollama\", \"mode\": \"synthetic\", \"message\": \"[coder] Completed step 'Implement deliverable' using capability 'software-development' on attempt 1. Description: Create the core output required by the objective.\" } ]",
+        "result": {
+          "finalText": "[coder] Completed step 'Implement deliverable' using capability 'software-development' on attempt 1. Description: Create the core output required by the objective.",
+          "providerResponses": [
+            {
+              "message": "[coder] Completed step 'Implement deliverable' using capability 'software-development' on attempt 1. Description: Create the core output required by the objective.",
+              "mode": "synthetic",
+              "provider": "ollama"
+            }
+          ],
+          "toolCalls": [
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "read_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "write_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "terminal_exec"
+            }
+          ],
+          "verification": {
+            "passed": true,
+            "reason": "software-development completed on attempt 1"
+          }
+        },
+        "run_id": "run-step-002-1"
+      },
+      "step-003": {
+        "assignee": null,
+        "payload_preview": "[ { \"provider\": \"ollama\", \"mode\": \"synthetic\", \"message\": \"[analyst] Completed step 'Verify delivery' using capability 'verification' on attempt 1. Description: Verify output quality and summarize remaining gaps.\" } ]",
+        "result": {
+          "finalText": "[analyst] Completed step 'Verify delivery' using capability 'verification' on attempt 1. Description: Verify output quality and summarize remaining gaps.",
+          "providerResponses": [
+            {
+              "message": "[analyst] Completed step 'Verify delivery' using capability 'verification' on attempt 1. Description: Verify output quality and summarize remaining gaps.",
+              "mode": "synthetic",
+              "provider": "ollama"
+            }
+          ],
+          "toolCalls": [
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "read_file"
+            },
+            {
+              "action": "execute",
+              "ok": true,
+              "toolId": "terminal_exec"
+            }
+          ],
+          "verification": {
+            "passed": true,
+            "reason": "verification completed on attempt 1"
+          }
+        },
+        "run_id": "run-step-003-1"
+      }
+    },
+    "started_at": "2026-03-14T16:58:30.079141+00:00",
+    "status": "completed",
+    "step_reports": [
+      {
+        "attempts": 1,
+        "diagnostics": {
+          "coverage_score": 1.0,
+          "escalation_required": false,
+          "evidence_score": 0.376,
+          "failure_class": "none",
+          "missing_signals": [],
+          "overall_score": 0.7919999999999999,
+          "recommended_actions": [],
+          "retryable": false,
+          "verification_score": 1.0
+        },
+        "started_at": "2026-03-14T16:58:30.088682+00:00",
+        "step_id": "step-001",
+        "summary": "Analyze objective verified after attempt 1"
+      },
+      {
+        "attempts": 1,
+        "diagnostics": {
+          "coverage_score": 1.0,
+          "escalation_required": false,
+          "evidence_score": 0.326,
+          "failure_class": "none",
+          "missing_signals": [],
+          "overall_score": 0.7753333333333333,
+          "recommended_actions": [],
+          "retryable": false,
+          "verification_score": 1.0
+        },
+        "started_at": "2026-03-14T16:58:30.108615+00:00",
+        "step_id": "step-002",
+        "summary": "Implement deliverable verified after attempt 1"
+      },
+      {
+        "attempts": 1,
+        "diagnostics": {
+          "coverage_score": 1.0,
+          "escalation_required": false,
+          "evidence_score": 0.306,
+          "failure_class": "none",
+          "missing_signals": [],
+          "overall_score": 0.7686666666666667,
+          "recommended_actions": [],
+          "retryable": false,
+          "verification_score": 1.0
+        },
+        "started_at": "2026-03-14T16:58:30.118184+00:00",
+        "step_id": "step-003",
+        "summary": "Verify delivery verified after attempt 1"
+      }
+    ],
+    "verification_summary": "Verification: 3/3 steps passed. Average score: 0.78"
+  }
+}

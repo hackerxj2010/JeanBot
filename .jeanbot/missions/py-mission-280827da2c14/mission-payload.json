@@ -1,0 +1,46 @@
+{
+  "decision_log": [],
+  "id": "py-mission-280827da2c14",
+  "objective": "Help me understand the current project structure",
+  "plan_version": 1,
+  "replan_history": [],
+  "risk": "low",
+  "steps": [
+    {
+      "assignee": null,
+      "capability": "research",
+      "depends_on": [],
+      "description": "Analyze objective and extract tasks: Help me understand the current project structure",
+      "id": "step-001",
+      "stage": "execution",
+      "status": "completed",
+      "title": "Analyze objective"
+    },
+    {
+      "assignee": null,
+      "capability": "software-development",
+      "depends_on": [
+        "step-001"
+      ],
+      "description": "Create the core output required by the objective.",
+      "id": "step-002",
+      "stage": "execution",
+      "status": "completed",
+      "title": "Implement deliverable"
+    },
+    {
+      "assignee": null,
+      "capability": "verification",
+      "depends_on": [
+        "step-002"
+      ],
+      "description": "Verify output quality and summarize remaining gaps.",
+      "id": "step-003",
+      "stage": "verification",
+      "status": "completed",
+      "title": "Verify delivery"
+    }
+  ],
+  "title": "Shell Mission: Help me understand the current...",
+  "workspace_id": "shell-workspace"
+}

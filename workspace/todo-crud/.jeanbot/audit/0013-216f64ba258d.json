@@ -1,0 +1,14 @@
+{
+  "data": {
+    "attempts": 1,
+    "capability": "software-development",
+    "failure_class": "none",
+    "mission_id": "py-mission-da1e08ceb954",
+    "model": "glm-5:cloud",
+    "overall_score": 0.7773333333333333,
+    "run_id": "run-step-crud-1"
+  },
+  "entity_id": "step-crud",
+  "event": "mission.step.completed",
+  "service": "agent-orchestrator"
+}

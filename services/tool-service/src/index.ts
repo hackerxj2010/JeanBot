@@ -12,8 +12,8 @@ import { PolicyService } from "@jeanbot/policy-service";
 import { SearchService } from "@jeanbot/search-service";
 import { ensureLeastPrivilege } from "@jeanbot/security";
 import { TerminalService } from "@jeanbot/terminal-service";
-import { GitService } from "../../git-service/src/index.js";
-import { CodeIntelligence } from "../../../packages/code-intel/src/index.js";
+import { GitService } from "@jeanbot/git-service";
+import { CodeIntelligence } from "@jeanbot/code-intel";
 import type {
   PolicyDecision,
   ServiceHealth,

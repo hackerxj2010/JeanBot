@@ -1,0 +1,13 @@
+{
+  "data": {
+    "attempt": 1,
+    "escalation_required": false,
+    "failure_class": "none",
+    "mission_id": "py-mission-da1e08ceb954",
+    "overall_score": 0.7766666666666667,
+    "retryable": false
+  },
+  "entity_id": "step-scaffold",
+  "event": "mission.step.attempt.assessed",
+  "service": "agent-orchestrator"
+}

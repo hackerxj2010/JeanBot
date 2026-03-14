@@ -16,6 +16,8 @@
     "@jeanbot/search-service": "workspace:*",
     "@jeanbot/security": "workspace:*",
     "@jeanbot/terminal-service": "workspace:*",
+    "@jeanbot/git-service": "workspace:*",
+    "@jeanbot/code-intel": "workspace:*",
     "@jeanbot/types": "workspace:*"
   },
   "exports": {

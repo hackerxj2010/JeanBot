@@ -1,0 +1,10 @@
+{
+  "data": {
+    "approval_required": false,
+    "mission_id": "py-mission-da1e08ceb954",
+    "risk": "low"
+  },
+  "entity_id": "step-scaffold",
+  "event": "mission.step.policy.checked",
+  "service": "policy-service"
+}
