@@ -1,0 +1,375 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("POSTGRES_URL")
+}
+
+model Tenant {
+  id         String      @id
+  name       String
+  slug       String      @unique
+  createdAt  DateTime    @map("created_at")
+  users      User[]
+  workspaces Workspace[]
+  missions   Mission[]
+  apiKeys    ApiKey[]
+  roles      Role[]
+  sessions   AuthSession[]
+  heartbeats Heartbeat[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String                @id
+  tenantId     String                @map("tenant_id")
+  email        String
+  displayName  String                @map("display_name")
+  createdAt    DateTime              @map("created_at")
+  tenant       Tenant                @relation(fields: [tenantId], references: [id])
+  memberships  WorkspaceMembership[]
+  apiKeys      ApiKey[]
+  sessions     AuthSession[]
+  missions     Mission[]
+  notifications Notification[]
+
+  @@index([tenantId])
+  @@map("users")
+}
+
+model Workspace {
+  id          String                @id
+  tenantId    String                @map("tenant_id")
+  name        String
+  slug        String
+  createdAt   DateTime              @map("created_at")
+  tenant      Tenant                @relation(fields: [tenantId], references: [id])
+  memberships WorkspaceMembership[]
+  missions    Mission[]
+  heartbeats  Heartbeat[]
+  memories    MemoryRecord[]
+  documents   KnowledgeDocument[]
+  billingSubscription WorkspaceBillingSubscription?
+  quotaOverride WorkspaceQuotaOverride?
+  usageEvents BillingUsageEvent[]
+  integrations ConnectedIntegration[]
+  notifications Notification[]
+
+  @@index([tenantId])
+  @@map("workspaces")
+}
+
+model WorkspaceMembership {
+  id          String    @id
+  tenantId    String    @map("tenant_id")
+  workspaceId String    @map("workspace_id")
+  userId      String    @map("user_id")
+  roleIds     Json      @map("role_ids")
+  createdAt   DateTime  @map("created_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, userId])
+  @@index([workspaceId])
+  @@map("workspace_memberships")
+}
+
+model ApiKey {
+  id          String    @id
+  tenantId    String    @map("tenant_id")
+  userId      String    @map("user_id")
+  workspaceIds Json     @map("workspace_ids")
+  label       String
+  hashedKey   String    @unique @map("hashed_key")
+  preview     String
+  active      Boolean
+  createdAt   DateTime  @map("created_at")
+  lastUsedAt  DateTime? @map("last_used_at")
+  tenant      Tenant    @relation(fields: [tenantId], references: [id])
+  user        User      @relation(fields: [userId], references: [id])
+
+  @@index([tenantId])
+  @@map("api_keys")
+}
+
+model Role {
+  id          String   @id
+  tenantId    String   @map("tenant_id")
+  name        String
+  permissions Json
+  system      Boolean  @default(false)
+  createdAt   DateTime @map("created_at")
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId])
+  @@map("roles")
+}
+
+model AuthSession {
+  id               String   @id
+  tenantId         String   @map("tenant_id")
+  userId           String   @map("user_id")
+  workspaceIds     Json     @map("workspace_ids")
+  roleIds          Json     @map("role_ids")
+  permissions      Json
+  subjectType      String   @map("subject_type")
+  accessTokenHash  String   @unique @map("access_token_hash")
+  refreshTokenHash String   @unique @map("refresh_token_hash")
+  accessExpiresAt  DateTime @map("access_expires_at")
+  refreshExpiresAt DateTime @map("refresh_expires_at")
+  createdAt        DateTime @map("created_at")
+  lastUsedAt       DateTime? @map("last_used_at")
+  revokedAt        DateTime? @map("revoked_at")
+  tenant           Tenant   @relation(fields: [tenantId], references: [id])
+  user             User     @relation(fields: [userId], references: [id])
+
+  @@index([tenantId, userId])
+  @@map("auth_sessions")
+}
+
+model Mission {
+  id                   String              @id
+  tenantId             String?             @map("tenant_id")
+  workspaceId          String              @map("workspace_id")
+  userId               String              @map("user_id")
+  title                String
+  objective            String
+  context              String
+  desiredOutcome       String?             @map("desired_outcome")
+  constraints          Json
+  requiredCapabilities Json                @map("required_capabilities")
+  risk                 String
+  status               String
+  planVersion          Int                 @default(0) @map("plan_version")
+  replanCount          Int                 @default(0) @map("replan_count")
+  rawRecord            Json                @map("raw_record")
+  createdAt            DateTime            @map("created_at")
+  updatedAt            DateTime            @map("updated_at")
+  tenant               Tenant?             @relation(fields: [tenantId], references: [id])
+  workspace            Workspace           @relation(fields: [workspaceId], references: [id])
+  user                 User                @relation(fields: [userId], references: [id])
+  approvals            Approval[]
+  transitions          MissionTransition[]
+
+  @@index([tenantId, workspaceId])
+  @@index([status])
+  @@map("missions")
+}
+
+model Approval {
+  id              String    @id
+  missionId       String    @map("mission_id")
+  tenantId        String?   @map("tenant_id")
+  workspaceId     String    @map("workspace_id")
+  status          String
+  reason          String
+  requiredActions Json      @map("required_actions")
+  approvedBy      String?   @map("approved_by")
+  createdAt       DateTime  @map("created_at")
+  updatedAt       DateTime  @map("updated_at")
+  mission         Mission   @relation(fields: [missionId], references: [id])
+
+  @@index([missionId, status])
+  @@map("approvals")
+}
+
+model MissionTransition {
+  id        String   @id
+  missionId String   @map("mission_id")
+  from      String   @map("from_status")
+  to        String   @map("to_status")
+  reason    String
+  actor     String
+  createdAt DateTime @map("created_at")
+  mission   Mission  @relation(fields: [missionId], references: [id])
+
+  @@index([missionId, createdAt])
+  @@map("mission_transitions")
+}
+
+model AuditEvent {
+  id        String   @id
+  kind      String
+  entityId  String   @map("entity_id")
+  actor     String
+  details   Json
+  createdAt DateTime @map("created_at")
+
+  @@index([entityId, createdAt])
+  @@map("audit_events")
+}
+
+model Heartbeat {
+  id         String    @id
+  tenantId   String?   @map("tenant_id")
+  workspaceId String   @map("workspace_id")
+  name       String
+  schedule   String
+  objective  String
+  active     Boolean
+  lastRunAt  DateTime? @map("last_run_at")
+  nextRunAt  DateTime? @map("next_run_at")
+  lastScheduledAt DateTime? @map("last_scheduled_at")
+  schedulerStatus String? @map("scheduler_status")
+  lastSchedulerError String? @map("last_scheduler_error")
+  tenant     Tenant?   @relation(fields: [tenantId], references: [id])
+  workspace  Workspace @relation(fields: [workspaceId], references: [id])
+  executions HeartbeatExecution[]
+
+  @@index([workspaceId, active])
+  @@map("heartbeats")
+}
+
+model HeartbeatExecution {
+  id          String    @id
+  heartbeatId String    @map("heartbeat_id")
+  tenantId    String?   @map("tenant_id")
+  workspaceId String    @map("workspace_id")
+  status      String
+  triggerKind String    @map("trigger_kind")
+  requestedBy String?   @map("requested_by")
+  summary     String
+  result      Json      @default("{}")
+  createdAt   DateTime  @map("created_at")
+  startedAt   DateTime? @map("started_at")
+  finishedAt  DateTime? @map("finished_at")
+  error       String?
+  heartbeat   Heartbeat @relation(fields: [heartbeatId], references: [id])
+
+  @@index([heartbeatId, createdAt])
+  @@index([workspaceId, createdAt])
+  @@map("heartbeat_executions")
+}
+
+model MemoryRecord {
+  id         String   @id
+  workspaceId String  @map("workspace_id")
+  scope      String
+  text       String
+  tags       Json
+  importance Float?
+  contentHash String  @map("content_hash")
+  createdAt  DateTime @map("created_at")
+  embedding  Unsupported("vector")?
+  embeddingModel String? @map("embedding_model")
+  embeddingUpdatedAt DateTime? @map("embedding_updated_at")
+  workspace  Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@map("memory_records")
+}
+
+model KnowledgeDocument {
+  id          String   @id
+  workspaceId String   @map("workspace_id")
+  title       String
+  body        String
+  metadata    Json     @default("{}")
+  contentHash String   @map("content_hash")
+  excerpt     String
+  createdAt   DateTime @map("created_at")
+  embedding   Unsupported("vector")?
+  embeddingModel String? @map("embedding_model")
+  embeddingUpdatedAt DateTime? @map("embedding_updated_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@map("knowledge_documents")
+}
+
+model WorkspaceBillingSubscription {
+  workspaceId String   @id @map("workspace_id")
+  tenantId    String?  @map("tenant_id")
+  planId      String   @map("plan_id")
+  stripeCustomerId String? @map("stripe_customer_id")
+  stripeSubscriptionId String? @map("stripe_subscription_id")
+  createdAt   DateTime @map("created_at")
+  updatedAt   DateTime @map("updated_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([tenantId])
+  @@map("workspace_billing_subscriptions")
+}
+
+model WorkspaceQuotaOverride {
+  workspaceId String   @id @map("workspace_id")
+  tenantId    String?  @map("tenant_id")
+  limits      Json
+  reason      String?
+  updatedBy   String?  @map("updated_by")
+  createdAt   DateTime @map("created_at")
+  updatedAt   DateTime @map("updated_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([tenantId])
+  @@map("workspace_quota_overrides")
+}
+
+model BillingUsageEvent {
+  id          String   @id
+  workspaceId String   @map("workspace_id")
+  tenantId    String?  @map("tenant_id")
+  metric      String
+  quantity    Float
+  sourceService String @map("source_service")
+  sourceEntityId String @map("source_entity_id")
+  timestamp   DateTime
+  stripeSyncStatus String @map("stripe_sync_status")
+  stripeError String? @map("stripe_error")
+  billable    Boolean
+  meteredAt   DateTime @map("metered_at")
+  metadata    Json     @default("{}")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@index([workspaceId, timestamp])
+  @@map("billing_usage_events")
+}
+
+model ConnectedIntegration {
+  id          String   @id
+  tenantId    String?  @map("tenant_id")
+  workspaceId String   @map("workspace_id")
+  provider    String
+  status      String
+  scopes      Json
+  providerAccountId String? @map("provider_account_id")
+  encryptedAccessToken String? @map("encrypted_access_token")
+  encryptedRefreshToken String? @map("encrypted_refresh_token")
+  accessTokenExpiresAt DateTime? @map("access_token_expires_at")
+  lastError   String? @map("last_error")
+  metadata    Json    @default("{}")
+  connectedAt DateTime @map("connected_at")
+  updatedAt   DateTime @map("updated_at")
+  workspace   Workspace @relation(fields: [workspaceId], references: [id])
+
+  @@unique([workspaceId, provider])
+  @@index([tenantId, workspaceId])
+  @@map("connected_integrations")
+}
+
+model Notification {
+  id         String   @id
+  tenantId   String?  @map("tenant_id")
+  workspaceId String  @map("workspace_id")
+  userId     String   @map("user_id")
+  channel    String
+  eventType  String   @map("event_type")
+  target     String
+  subject    String
+  body       String
+  status     String
+  mode       String
+  metadata   Json     @default("{}")
+  createdAt  DateTime @map("created_at")
+  sentAt     DateTime? @map("sent_at")
+  error      String?
+  workspace  Workspace @relation(fields: [workspaceId], references: [id])
+  user       User      @relation(fields: [userId], references: [id])
+
+  @@index([workspaceId, createdAt])
+  @@index([userId, createdAt])
+  @@map("notifications")
+}

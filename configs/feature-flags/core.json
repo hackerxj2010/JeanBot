@@ -1,0 +1,7 @@
+{
+  "planMode": true,
+  "checkpoints": true,
+  "auditTrail": true,
+  "heartbeat": true,
+  "subagents": true
+}

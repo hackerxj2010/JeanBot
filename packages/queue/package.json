@@ -1,0 +1,14 @@
+{
+  "name": "@jeanbot/queue",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/types": "workspace:*",
+    "bullmq": "^5.56.8",
+    "ioredis": "^5.5.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

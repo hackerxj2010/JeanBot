@@ -1,0 +1,25 @@
+{
+  "name": "@jeanbot/terminal-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/audit-service": "workspace:*",
+    "@jeanbot/documents": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/policy-service": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "chokidar": "^4.0.3",
+    "fastify": "^5.6.1",
+    "node-pty": "^1.1.0-beta34"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

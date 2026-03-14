@@ -1,0 +1,26 @@
+{
+  "name": "@jeanbot/automation-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/events": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/notification-service": "workspace:*",
+    "@jeanbot/persistence": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/queue": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "fastify": "^5.6.1",
+    "ioredis": "^5.10.0",
+    "node-cron": "^4.2.1"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

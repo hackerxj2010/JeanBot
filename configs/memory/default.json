@@ -1,0 +1,5 @@
+{
+  "sessionTtlMinutes": 120,
+  "longTermRetentionDays": 365,
+  "maxSummaryEntries": 5
+}

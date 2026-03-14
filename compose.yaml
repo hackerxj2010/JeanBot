@@ -1,0 +1,255 @@
+services:
+  api-gateway:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/api-gateway dev"
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8080
+      LOG_LEVEL: info
+      JEANBOT_AUTH_REQUIRED: "true"
+      JEANBOT_SERVICE_MODE: http
+      JEANBOT_PERSISTENCE_MODE: postgres
+      JEANBOT_QUEUE_MODE: redis
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+      REDIS_URL: redis://redis:6379
+      AUTH_SERVICE_URL: http://auth-service:8081
+      USER_SERVICE_URL: http://user-service:8082
+      AGENT_ORCHESTRATOR_URL: http://agent-orchestrator:8083
+      AUTOMATION_SERVICE_URL: http://automation-service:8089
+      BROWSER_SERVICE_URL: http://browser-service:8090
+      TERMINAL_SERVICE_URL: http://terminal-service:8091
+      COMMUNICATION_SERVICE_URL: http://communication-service:8092
+      KNOWLEDGE_SERVICE_URL: http://knowledge-service:8093
+      BILLING_SERVICE_URL: http://billing-service:8094
+    depends_on:
+      - auth-service
+      - user-service
+      - agent-orchestrator
+      - automation-service
+      - browser-service
+      - terminal-service
+      - communication-service
+      - knowledge-service
+      - billing-service
+      - postgres
+      - redis
+
+  auth-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/auth-service dev"
+    ports:
+      - "8081:8081"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8081
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+    depends_on:
+      - postgres
+
+  user-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/user-service dev"
+    ports:
+      - "8082:8082"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8082
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+    depends_on:
+      - postgres
+
+  agent-orchestrator:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/agent-orchestrator dev"
+    ports:
+      - "8083:8083"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8083
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      JEANBOT_QUEUE_MODE: redis
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+  automation-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/automation-service dev"
+    ports:
+      - "8089:8089"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8089
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      JEANBOT_QUEUE_MODE: redis
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - postgres
+      - redis
+
+  communication-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/communication-service dev"
+    ports:
+      - "8092:8092"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8092
+      LOG_LEVEL: info
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+
+  knowledge-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/knowledge-service dev"
+    ports:
+      - "8093:8093"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8093
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+    depends_on:
+      - postgres
+
+  billing-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/billing-service dev"
+    ports:
+      - "8094:8094"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8094
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+    depends_on:
+      - postgres
+
+  browser-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/browser-service dev"
+    ports:
+      - "8090:8090"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8090
+      LOG_LEVEL: info
+      PLAYWRIGHT_LIVE: "false"
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+
+  terminal-service:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/terminal-service dev"
+    ports:
+      - "8091:8091"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      PORT: 8091
+      LOG_LEVEL: info
+      INTERNAL_SERVICE_TOKEN: jeanbot-internal-dev-token
+      JEANBOT_ALLOWED_WORKSPACE_ROOT: /app/workspace
+
+  queue-worker:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/queue-worker dev"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      JEANBOT_QUEUE_MODE: redis
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - agent-orchestrator
+      - postgres
+      - redis
+
+  heartbeat-worker:
+    image: node:22
+    working_dir: /app
+    command: sh -c "corepack enable && pnpm install && pnpm --filter @jeanbot/heartbeat-worker dev"
+    volumes:
+      - ./:/app
+    environment:
+      NODE_ENV: development
+      LOG_LEVEL: info
+      JEANBOT_PERSISTENCE_MODE: postgres
+      JEANBOT_QUEUE_MODE: redis
+      POSTGRES_URL: postgres://postgres:postgres@postgres:5432/jeanbot
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      - automation-service
+      - postgres
+      - redis
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: jeanbot
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./database/postgres/schemas:/docker-entrypoint-initdb.d:ro
+
+  redis:
+    image: redis:7
+    ports:
+      - "6379:6379"
+
+volumes:
+  pgdata:

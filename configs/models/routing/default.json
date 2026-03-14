@@ -1,0 +1,14 @@
+{
+  "default": {
+    "provider": "openai",
+    "model": "gpt-5"
+  },
+  "critical": {
+    "provider": "anthropic",
+    "model": "claude-opus"
+  },
+  "latency_sensitive": {
+    "provider": "openai",
+    "model": "gpt-5-mini"
+  }
+}

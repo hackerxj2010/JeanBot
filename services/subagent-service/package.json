@@ -1,0 +1,17 @@
+{
+  "name": "@jeanbot/subagent-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/agent-runtime": "workspace:*",
+    "@jeanbot/audit-service": "workspace:*",
+    "@jeanbot/documents": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/model-router": "workspace:*",
+    "@jeanbot/types": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "@jeanbot/ai",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/model-router": "workspace:*",
+    "@jeanbot/telemetry": "workspace:*",
+    "@jeanbot/types": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

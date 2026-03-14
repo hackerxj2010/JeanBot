@@ -1,0 +1,23 @@
+{
+  "name": "@jeanbot/billing-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/documents": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/persistence": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "fastify": "^5.8.2",
+    "stripe": "^20.4.1"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

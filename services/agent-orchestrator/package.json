@@ -1,0 +1,31 @@
+{
+  "name": "@jeanbot/agent-orchestrator",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/agent-runtime": "workspace:*",
+    "@jeanbot/audit-service": "workspace:*",
+    "@jeanbot/documents": "workspace:*",
+    "@jeanbot/file-service": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/memory-service": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/persistence": "workspace:*",
+    "@jeanbot/policy-service": "workspace:*",
+    "@jeanbot/queue": "workspace:*",
+    "@jeanbot/subagent-service": "workspace:*",
+    "@jeanbot/tool-service": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "@jeanbot/validators": "workspace:*",
+    "fastify": "^5.6.1"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

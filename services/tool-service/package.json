@@ -1,0 +1,24 @@
+{
+  "name": "@jeanbot/tool-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/audit-service": "workspace:*",
+    "@jeanbot/browser-service": "workspace:*",
+    "@jeanbot/communication-service": "workspace:*",
+    "@jeanbot/file-service": "workspace:*",
+    "@jeanbot/knowledge-service": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/memory-service": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/policy-service": "workspace:*",
+    "@jeanbot/search-service": "workspace:*",
+    "@jeanbot/security": "workspace:*",
+    "@jeanbot/terminal-service": "workspace:*",
+    "@jeanbot/types": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -1,0 +1,4 @@
+{
+  "channels": ["email", "slack", "webhook"],
+  "requireApprovalForSend": true
+}

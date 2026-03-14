@@ -1,0 +1,20 @@
+{
+  "workspaceId": "workspace-demo",
+  "userId": "user-demo",
+  "title": "Bootstrap JeanBot core",
+  "objective": "Build the JeanBot backend core with orchestration, memory, tools, policies, and audit services.",
+  "context": "UI is intentionally out of scope.",
+  "constraints": [
+    "Do not implement the UI",
+    "Prioritize backend services and architecture"
+  ],
+  "desiredOutcome": "A runnable backend monorepo foundation",
+  "requiredCapabilities": [
+    "planning",
+    "filesystem",
+    "memory",
+    "software-development",
+    "orchestration"
+  ],
+  "risk": "medium"
+}

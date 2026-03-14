@@ -1,0 +1,17 @@
+{
+  "name": "@jeanbot/persistence",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/ai": "workspace:*",
+    "@jeanbot/documents": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "@prisma/client": "^6.19.2",
+    "pg": "^8.13.1"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

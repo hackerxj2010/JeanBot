@@ -1,0 +1,5 @@
+{
+  "defaultTimeoutMs": 15000,
+  "maxTimeoutMs": 60000,
+  "allowInteractive": false
+}

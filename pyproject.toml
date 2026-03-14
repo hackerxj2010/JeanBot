@@ -1,0 +1,8 @@
+[project]
+name = "jeanbot-python"
+version = "0.1.0"
+description = "Python execution surface for the JeanBot cognitive mission executor"
+requires-python = ">=3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests/python"]

@@ -1,0 +1,14 @@
+{
+  "name": "@jeanbot/validators",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/schemas": "workspace:*",
+    "@jeanbot/security": "workspace:*",
+    "@jeanbot/types": "workspace:*"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

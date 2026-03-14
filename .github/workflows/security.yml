@@ -1,0 +1,11 @@
+name: Security
+
+on:
+  workflow_dispatch:
+
+jobs:
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Integrate dependency, secrets, and container scanning here."

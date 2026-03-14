@@ -1,0 +1,51 @@
+{
+  "name": "jeanbot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.29.3",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "bootstrap": "pnpm install",
+    "dev": "pnpm --filter @jeanbot/api-gateway dev",
+    "start": "pnpm --filter @jeanbot/api-gateway start",
+    "build": "turbo run build",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "biome lint . && pnpm typecheck",
+    "format": "biome format --write .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma db push",
+    "db:validate": "prisma validate",
+    "db:seed": "pnpm exec tsx scripts/db/seed.ts",
+    "smoke": "pnpm exec tsx scripts/dev/smoke.ts",
+    "smoke:redis": "pnpm exec tsx scripts/dev/smoke-redis.ts",
+    "live:ollama": "pnpm exec tsx scripts/dev/ollama-live.ts"
+  },
+  "dependencies": {
+    "@fastify/websocket": "^11.2.0",
+    "@prisma/client": "^6.19.2",
+    "fastify": "^5.6.1",
+    "googleapis": "^171.4.0",
+    "ioredis": "^5.10.0",
+    "node-cron": "^4.2.1",
+    "stripe": "^20.4.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@playwright/test": "^1.54.2",
+    "@types/node": "^24.0.1",
+    "@types/pg": "^8.15.0",
+    "prisma": "^6.13.0",
+    "redis-memory-server": "^0.16.0",
+    "tsx": "^4.20.6",
+    "turbo": "^2.5.8",
+    "typescript": "^5.6.3",
+    "vite-tsconfig-paths": "^6.1.1",
+    "vitest": "^2.1.9"
+  }
+}

@@ -1,0 +1,12 @@
+{
+  "name": "@jeanbot/logger",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "pino": "^9.5.0"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

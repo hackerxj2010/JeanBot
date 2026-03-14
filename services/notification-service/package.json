@@ -1,0 +1,23 @@
+{
+  "name": "@jeanbot/notification-service",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jeanbot/communication-service": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "@jeanbot/persistence": "workspace:*",
+    "@jeanbot/platform": "workspace:*",
+    "@jeanbot/telemetry": "workspace:*",
+    "@jeanbot/types": "workspace:*",
+    "fastify": "^5.8.2"
+  },
+  "scripts": {
+    "dev": "tsx src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc -p ../../tsconfig.json --noEmit"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  }
+}

@@ -1,0 +1,16 @@
+name: Docs
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - "docs/**"
+      - "README.md"
+      - "ARCHITECTURE.md"
+
+jobs:
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: echo "Validate docs links and publish docs site when implemented."
