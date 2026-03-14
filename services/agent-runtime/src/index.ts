@@ -759,13 +759,13 @@ export class AgentRuntimeService {
         action: "write-artifact",
         payload: {
           ...baseWorkspace,
-          fileName: `$slugify(request.step.title).md`,
+          fileName: `${slugify(request.step.title)}.md`,
           content: joinNonEmpty(
-            `# $request.objective.title:: $request.step.title`,
+            `# ${request.objective.title}:: ${request.step.title}`,
             "",
-            `Objective: $request.objective.objective`,
-            `Verification: $request.step.verification`,
-            providerText ? `Initial runtime note: $summarizeText(providerText, 320)` : ""
+            `Objective: ${request.objective.objective}`,
+            `Verification: ${request.step.verification}`,
+            providerText ? `Initial runtime note: ${summarizeText(providerText, 320)}` : ""
           ),
           permissions: ["write"]
         },
@@ -797,7 +797,7 @@ export class AgentRuntimeService {
             action: "create-checkpoint",
             payload: {
               ...baseWorkspace,
-              note: `Checkpoint before $request.step.title`,
+            note: `Checkpoint before ${request.step.title}`,
               files: [],
               permissions: ["write"]
             },
@@ -1007,7 +1007,7 @@ export class AgentRuntimeService {
             channel: "email",
             subject: `JeanBot draft for ${request.objective.title}`,
             body: summarizeText(
-              `${request.objective.objective}\n\nStep: $request.step.title`,
+              `${request.objective.objective}\n\nStep: ${request.step.title}`,
               400
             ),
             permissions: ["draft"]
@@ -1297,7 +1297,7 @@ export class AgentRuntimeService {
         const payload = outcome.result
           ? jsonPreview(outcome.result.payload)
           : summarizeText(outcome.error ?? "tool failure", 200);
-        return `$outcome.record.toolId($status): $payload`;
+        return `${outcome.record.toolId} (${status}): ${payload}`;
       })
       .join("\n");
   }
@@ -1362,7 +1362,7 @@ export class AgentRuntimeService {
         action: "ingest-knowledge-document",
         payload: {
           workspaceId: request.objective.workspaceId,
-          title: `$request.objective.title:: $request.step.title`,
+          title: `${request.objective.title}:: ${request.step.title}`,
           body: finalText,
           metadata: {
             missionId: request.objective.id,
@@ -1387,7 +1387,7 @@ export class AgentRuntimeService {
         action: "write-artifact",
         payload: {
           ...toolPayloadWorkspaceRoot(request.context),
-          fileName: `$slugify(request.objective.title)-$slugify(request.step.title).md`,
+          fileName: `${slugify(request.objective.title)}-${slugify(request.step.title)}.md`,
           content: finalText,
           permissions: ["write"]
         },
