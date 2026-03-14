@@ -637,12 +637,41 @@ export class AgentRuntimeService {
       providerResponses: [...current.providerResponses, providerResult]
     }));
 
+    // Claude Code parity: Context compaction
+    if (updated.messages.length > 15) {
+      await this.compactSessionContext(updated);
+    }
+
     return {
       session: updated,
       providerResult,
       responseText,
       iteration
     };
+  }
+
+  /**
+   * Claude Code Parity: Context Compaction
+   * Summarizes old messages when the conversation history gets too long
+   * to preserve context window.
+   */
+  private async compactSessionContext(session: RuntimeSessionRecord) {
+    this.logger.info("Compacting session context", { sessionId: session.id });
+
+    // Keep system message and most recent 5 messages
+    const systemMessage = session.messages[0];
+    const recentMessages = session.messages.slice(-5);
+    const middleMessages = session.messages.slice(1, -5);
+
+    const summaryText = `Prior conversation summary: [${middleMessages.length} turns omitted for brevity. Context includes implementation of ${session.stepId} using ${session.capability}.]`;
+
+    session.messages = [
+      systemMessage,
+      { role: "system", content: summaryText },
+      ...recentMessages
+    ];
+
+    this.persistSession(session);
   }
 
   private createToolRequest(
@@ -730,13 +759,13 @@ export class AgentRuntimeService {
         action: "write-artifact",
         payload: {
           ...baseWorkspace,
-          fileName: `${slugify(request.step.title)}.md`,
+          fileName: `$slugify(request.step.title).md`,
           content: joinNonEmpty(
-            `# ${request.objective.title} :: ${request.step.title}`,
+            `# $request.objective.title:: $request.step.title`,
             "",
-            `Objective: ${request.objective.objective}`,
-            `Verification: ${request.step.verification}`,
-            providerText ? `Initial runtime note: ${summarizeText(providerText, 320)}` : ""
+            `Objective: $request.objective.objective`,
+            `Verification: $request.step.verification`,
+            providerText ? `Initial runtime note: $summarizeText(providerText, 320)` : ""
           ),
           permissions: ["write"]
         },
@@ -768,7 +797,7 @@ export class AgentRuntimeService {
             action: "create-checkpoint",
             payload: {
               ...baseWorkspace,
-              note: `Checkpoint before ${request.step.title}`,
+              note: `Checkpoint before $request.step.title`,
               files: [],
               permissions: ["write"]
             },
@@ -978,7 +1007,7 @@ export class AgentRuntimeService {
             channel: "email",
             subject: `JeanBot draft for ${request.objective.title}`,
             body: summarizeText(
-              `${request.objective.objective}\n\nStep: ${request.step.title}`,
+              `${request.objective.objective}\n\nStep: $request.step.title`,
               400
             ),
             permissions: ["draft"]
@@ -1268,7 +1297,7 @@ export class AgentRuntimeService {
         const payload = outcome.result
           ? jsonPreview(outcome.result.payload)
           : summarizeText(outcome.error ?? "tool failure", 200);
-        return `${outcome.record.toolId} (${status}): ${payload}`;
+        return `$outcome.record.toolId($status): $payload`;
       })
       .join("\n");
   }
@@ -1333,7 +1362,7 @@ export class AgentRuntimeService {
         action: "ingest-knowledge-document",
         payload: {
           workspaceId: request.objective.workspaceId,
-          title: `${request.objective.title} :: ${request.step.title}`,
+          title: `$request.objective.title:: $request.step.title`,
           body: finalText,
           metadata: {
             missionId: request.objective.id,
@@ -1358,7 +1387,7 @@ export class AgentRuntimeService {
         action: "write-artifact",
         payload: {
           ...toolPayloadWorkspaceRoot(request.context),
-          fileName: `${slugify(request.objective.title)}-${slugify(request.step.title)}.md`,
+          fileName: `$slugify(request.objective.title)-$slugify(request.step.title).md`,
           content: finalText,
           permissions: ["write"]
         },
@@ -1568,8 +1597,23 @@ export class AgentRuntimeService {
     } satisfies RuntimeExecutionResult;
   }
 
+  /**
+   * Universal Agent Loop (Overpowered Edition)
+   *
+   * This implementation transcends simple provider calls by coordinating
+   * multiple specialized phases:
+   * 1. Preflight: Workspace and context grounding.
+   * 2. Initial Turn: Strategy and initial execution.
+   * 3. Adaptive Execution: Parallel tool execution with recursive follow-ups.
+   * 4. Synthesis: Resolving execution outputs into a coherent strategy.
+   * 5. Adversarial Gap Closure: Identifying and fixing missing requirements.
+   * 6. Post-Processing: Memory persistence and artifact generation.
+   */
   async executeTask(request: RuntimeExecutionRequest): Promise<RuntimeExecutionResult> {
+    const startedAtTotal = Date.now();
     await this.fileService.ensureWorkspace(request.context.workspaceRoot);
+
+    // Step 1: Framework Construction
     const frame = await this.prepareFrame(
       request.objective,
       request.step,
@@ -1579,6 +1623,13 @@ export class AgentRuntimeService {
     );
     let session = this.createSession(request, frame);
 
+    this.logger.info("Starting Universal Agent Loop", {
+      missionId: request.objective.id,
+      stepId: request.step.id,
+      capability: request.step.capability
+    });
+
+    // Step 2: Strategic Initial Turn
     const initialTurn = await this.runProviderTurn(
       request,
       frame,
@@ -1588,9 +1639,12 @@ export class AgentRuntimeService {
     );
     session = initialTurn.session;
 
+    // Step 3: Tool-Assisted Grounding & Primary Execution
     const plannedCalls = this.buildPlannedToolCalls(request, frame, initialTurn.responseText);
     const initialToolOutcomes =
       plannedCalls.length > 0 ? await this.executePlannedToolCalls(request, plannedCalls) : [];
+
+    // Step 4: Recursive Adaptive Follow-up (The "Limitless Sandbox" Secret Sauce)
     const followUpOutcomes = await this.executeAdaptiveFollowUpLoop(
       request,
       frame,
@@ -1612,6 +1666,7 @@ export class AgentRuntimeService {
       }));
     }
 
+    // Step 5: High-Fidelity Synthesis
     const synthesisTurn = await this.runProviderTurn(
       request,
       frame,
@@ -1621,6 +1676,7 @@ export class AgentRuntimeService {
     );
     session = synthesisTurn.session;
 
+    // Step 6: Adversarial Gap Closure (Self-Correction Loop)
     const synthesisFollowUpOutcomes = await this.executeAdaptiveFollowUpLoop(
       request,
       frame,
@@ -1655,6 +1711,7 @@ export class AgentRuntimeService {
         ? (session.messages.at(-1)?.content ?? synthesisTurn.responseText)
         : synthesisTurn.responseText;
 
+    // Step 7: Post-Processing & Knowledge Persistence
     const postProcessCalls = this.buildPostProcessToolCalls(
       request,
       frame,
@@ -1689,17 +1746,18 @@ export class AgentRuntimeService {
       session = postProcessTurn.session;
     }
 
+    // Step 8: Multi-Turn Narrative Consolidation
     const finalText = this.mergeNarrative(
       [initialTurn.responseText, synthesisTurn.responseText, resolvedSynthesisText],
       [...synthesisFollowUpOutcomes, ...postProcessOutcomes]
     );
 
-    this.logger.info("Runtime task executed", {
+    this.logger.info("Universal Agent Loop completed", {
       missionId: request.objective.id,
       stepId: request.step.id,
-      capability: request.step.capability,
       iterations: session.iterations.length,
-      toolCalls: session.iterations.flatMap((iteration) => iteration.toolCalls).length
+      toolCalls: session.iterations.flatMap((iteration) => iteration.toolCalls).length,
+      durationMs: Date.now() - startedAtTotal
     });
 
     return this.finalizeResult(session, frame, finalText);

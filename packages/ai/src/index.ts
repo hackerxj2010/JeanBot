@@ -243,3 +243,91 @@ export const cosineSimilarity = (left: number[] | undefined, right: number[] | u
 
 export const normalizeEmbeddingText = normalizeText;
 export const embeddingContentHash = contentHashFor;
+
+/**
+ * Advanced AI Provider abstractions for the Universal AI Employee.
+ * Supports streaming, tool-calling, and cross-provider normalization.
+ */
+
+import { generateText as aiGenerateText, streamText as aiStreamText, type Tool } from "ai";
+import { anthropic } from "@ai-sdk/anthropic";
+import { openai } from "@ai-sdk/openai";
+
+export type AIProvider = "anthropic" | "openai" | "ollama" | "synthetic";
+
+export interface AIExecutionOptions {
+  provider: AIProvider;
+  model: string;
+  system?: string;
+  prompt: string;
+  temperature?: number;
+  maxTokens?: number;
+  tools?: Record<string, Tool>;
+}
+
+export interface AIExecutionResult {
+  text: string;
+  toolResults?: any[];
+  usage?: {
+    promptTokens: number;
+    completionTokens: number;
+    totalTokens: number;
+  };
+}
+
+export const executeAI = async (options: AIExecutionOptions): Promise<AIExecutionResult> => {
+  const startedAt = Date.now();
+  const { provider, model, system, prompt, temperature = 0.7, maxTokens, tools } = options;
+
+  try {
+    if (provider === "synthetic") {
+      return { text: `[Synthetic Response] I am JeanBot. I have processed your prompt: "${summarizeText(prompt, 100)}"` };
+    }
+
+    const aiModel = provider === "anthropic" ? (anthropic as any)(model) : (openai as any)(model);
+    const result = await (aiGenerateText as any)({
+      model: aiModel,
+      system,
+      prompt,
+      temperature,
+      maxTokens,
+      tools
+    });
+
+    recordCounter("jeanbot_ai_execution_total", "JeanBot AI execution total", { provider, model, status: "ok" });
+    recordDuration("jeanbot_ai_execution_duration_ms", "JeanBot AI execution duration", Date.now() - startedAt, { provider });
+
+    return {
+      text: result.text,
+      toolResults: result.toolResults,
+      usage: result.usage
+    };
+  } catch (error) {
+    recordCounter("jeanbot_ai_execution_total", "JeanBot AI execution total", { provider, model, status: "failed" });
+    throw error;
+  }
+};
+
+export const streamAI = async (options: AIExecutionOptions) => {
+  const { provider, model, system, prompt, temperature = 0.7, maxTokens, tools } = options;
+
+  if (provider === "synthetic") {
+    throw new Error("Streaming not supported for synthetic provider.");
+  }
+
+  const aiModel = provider === "anthropic" ? (anthropic as any)(model) : (openai as any)(model);
+  return (aiStreamText as any)({
+    model: aiModel,
+    system,
+    prompt,
+    temperature,
+    maxTokens,
+    tools
+  });
+};
+
+const summarizeText = (value: string, maxLength = 220) => {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 3)}...`;
+};

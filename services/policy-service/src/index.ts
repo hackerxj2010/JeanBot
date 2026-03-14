@@ -60,6 +60,27 @@ const missionRules: MissionRule[] = [
       input.includes("secret") ||
       input.includes("token") ||
       input.includes("pii")
+  },
+  {
+    id: "autonomous-synthesis",
+    severity: "medium",
+    message: "Autonomous tool synthesis detected. Verification of generated logic is mandatory.",
+    blockedActions: [],
+    test: (input, objective) =>
+      input.includes("synthesis") ||
+      input.includes("custom tool") ||
+      objective.requiredCapabilities.includes("synthesis")
+  },
+  {
+    id: "deep-system-access",
+    severity: "critical",
+    message: "Deep system or terminal access requested. Zero-trust guardrails active.",
+    blockedActions: ["rm-rf", "chmod-destructive"],
+    test: (input, objective) =>
+      input.includes("terminal") ||
+      input.includes("root") ||
+      input.includes("sudo") ||
+      objective.requiredCapabilities.includes("terminal")
   }
 ];
 

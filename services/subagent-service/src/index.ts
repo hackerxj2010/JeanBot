@@ -365,6 +365,28 @@ const templateByCapability: Record<Capability, TemplateDefinition> = {
     timeoutMs: 120_000,
     maxParallelTasks: 1,
     escalationThreshold: "high"
+  },
+  synthesis: {
+    role: "meta-agent",
+    instructions:
+      "Synthesize new tool logic and capabilities dynamically when existing ones are insufficient. Ensure all synthesized logic is secure and verifiable.",
+    toolIds: ["synthesis.tool.generate", "filesystem.workspace.scan", "terminal.command.run", "policy.evaluate"],
+    provider: "anthropic",
+    model: "claude-opus-4-6",
+    timeoutMs: 240_000,
+    maxParallelTasks: 1,
+    escalationThreshold: "critical"
+  },
+  verification: {
+    role: "verifier",
+    instructions:
+      "Perform adversarial verification of mission outputs. Run tests, verify requirements, and ensure no regressions or security gaps.",
+    toolIds: ["terminal.command.run", "filesystem.workspace.scan", "search.query", "knowledge.query"],
+    provider: "anthropic",
+    model: "claude-sonnet-4-6",
+    timeoutMs: 180_000,
+    maxParallelTasks: 2,
+    escalationThreshold: "high"
   }
 };
 
