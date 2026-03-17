@@ -19,6 +19,8 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser = subparsers.add_parser("execute", help="Execute a mission payload")
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    execute_parser.add_argument("--mode", default="local", choices=["local", "http"], help="Service mode")
+    execute_parser.add_argument("--api-url", default="http://localhost:8080/api", help="API Gateway URL")
 
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
@@ -26,6 +28,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    finalize_parser.add_argument("--mode", default="local", choices=["local", "http"], help="Service mode")
+    finalize_parser.add_argument("--api-url", default="http://localhost:8080/api", help="API Gateway URL")
 
     return parser
 
@@ -36,7 +40,11 @@ async def run_command(args: argparse.Namespace) -> dict:
         path = service.write_payload_template(args.output)
         return {"command": "write-template", "output": str(Path(path))}
 
-    service = MissionExecutorService(workspace_root=args.workspace_root)
+    service = MissionExecutorService(
+        workspace_root=args.workspace_root,
+        service_mode=args.mode,
+        api_url=args.api_url,
+    )
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)

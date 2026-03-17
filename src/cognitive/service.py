@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,6 +10,10 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpFileService,
+    HttpMemoryService,
+    HttpRuntimeService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -53,6 +58,13 @@ class MissionExecutorService:
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+    service_mode: str = field(
+        default_factory=lambda: os.getenv("JEANBOT_SERVICE_MODE", "local").lower()
+    )
+    api_url: str = field(default_factory=lambda: os.getenv("JEANBOT_API_URL", "http://localhost:8080/api"))
+    internal_token: str = field(
+        default_factory=lambda: os.getenv("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token")
+    )
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -80,13 +92,41 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
+        mode = mission_payload.get("mode", self.service_mode)
+        api_url = mission_payload.get("api_url", self.api_url)
+        internal_token = mission_payload.get("internal_token", self.internal_token)
+
+        if mode == "http":
+            audit_service = HttpAuditService(
+                api_url=api_url,
+                internal_token=internal_token,
+                auth_context=context.auth_context,
+            )
+            memory_service = HttpMemoryService(
+                api_url=api_url,
+                internal_token=internal_token,
+                auth_context=context.auth_context,
+            )
+            file_service = HttpFileService(
+                api_url=api_url,
+                internal_token=internal_token,
+                auth_context=context.auth_context,
+            )
+            runtime_service = HttpRuntimeService(
+                api_url=api_url,
+                internal_token=internal_token,
+                auth_context=context.auth_context,
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
         subagent_service = DeterministicSubAgentService(
             failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
         )
@@ -174,14 +214,29 @@ class MissionExecutorService:
         bundle: MissionExecutionBundle,
         result: MissionRunResult,
     ) -> None:
-        mission_dir = self._mission_dir(bundle.record.objective.id)
+        mission_id = bundle.record.objective.id
+        workspace_id = bundle.record.objective.workspace_id
+        mission_dir = self._mission_dir(mission_id)
+
+        audit_summary = {}
+        if hasattr(bundle.audit_service, "summarize"):
+            audit_summary = bundle.audit_service.summarize()
+
+        memory_summary = {}
+        if hasattr(bundle.memory_service, "summarize"):
+            memory_summary = bundle.memory_service.summarize(workspace_id)
+
+        artifact_paths = []
+        if hasattr(bundle.file_service, "artifact_paths"):
+            artifact_paths = bundle.file_service.artifact_paths(mission_id)
+
         summary = {
             "mission": asdict(bundle.record.objective),
             "plan_version": bundle.record.plan_version,
             "result": self._result_to_dict(result),
-            "audit_summary": bundle.audit_service.summarize(),
-            "memory_summary": bundle.memory_service.summarize(bundle.record.objective.workspace_id),
-            "artifact_paths": bundle.file_service.artifact_paths(bundle.record.objective.id),
+            "audit_summary": audit_summary,
+            "memory_summary": memory_summary,
+            "artifact_paths": artifact_paths,
         }
         (mission_dir / "mission-run.json").write_text(utc_json(summary), encoding="utf-8")
         (mission_dir / "mission-payload.json").write_text(
