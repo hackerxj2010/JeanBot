@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .executor import (
     ExecutionContext,
+    MissionArtifact,
     MissionObjective,
     MissionPlan,
     MissionStep,
@@ -254,6 +258,233 @@ class DeterministicRuntimeService:
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpBaseService:
+    api_url: str
+    internal_token: str
+    auth_context: dict | None = None
+    timeout: int = 30
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "jeanbot-python-cognitive",
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if self.auth_context:
+            encoded = base64.b64encode(json.dumps(self.auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, actor: str, data: dict):
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": actor,
+            "details": data,
+        }
+        await asyncio.to_thread(self._do_record, payload)
+
+    def _do_record(self, payload: dict):
+        req = urllib.request.Request(
+            f"{self.api_url}/internal/audit",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                resp.read()
+        except Exception:
+            # Audit failures shouldn't crash the mission in HTTP mode
+            pass
+
+    def summarize(self) -> dict[str, Any]:
+        # Remote audit summary is managed by the API/service.
+        # Returning a placeholder indicating remote status.
+        return {
+            "mode": "http",
+            "info": "Audit records are stored remotely.",
+        }
+
+
+@dataclass
+class HttpMemoryService(HttpBaseService):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        payload = {
+            "text": text,
+            "tags": tags,
+            "scope": self._map_scope(memory_type),
+            "importance": importance,
+        }
+        await asyncio.to_thread(self._do_remember, workspace_id, payload)
+
+    def _do_remember(self, workspace_id: str, payload: dict):
+        req = urllib.request.Request(
+            f"{self.api_url}/internal/memory/workspaces/{workspace_id}/remember",
+            data=json.dumps(payload).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            resp.read()
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        # Fetch summary from remote memory service
+        try:
+            req = urllib.request.Request(
+                f"{self.api_url}/internal/memory/workspaces/{workspace_id}/summary",
+                headers=self._headers(),
+                method="GET",
+            )
+            # This is called from a sync context in service.py (_persist_run_summary)
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                data = json.loads(resp.read())
+                return {
+                    "workspace_id": workspace_id,
+                    "remote_summary": data.get("summary", ""),
+                    "mode": "http",
+                }
+        except Exception:
+            return {"workspace_id": workspace_id, "mode": "http", "error": "Failed to fetch summary"}
+
+    def _map_scope(self, memory_type: str) -> str:
+        if memory_type == "session":
+            return "session"
+        if memory_type == "long-term":
+            return "long-term"
+        return "short-term"
+
+
+@dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        payload = {
+            "workspaceRoot": workspace_root,
+            "missionTitle": mission_title,
+            "completed": completed_steps,
+            "inProgress": running_steps,
+            "upcoming": pending_steps,
+        }
+        await asyncio.to_thread(self._do_update_workspace_context, payload)
+
+    def _do_update_workspace_context(self, payload: dict):
+        req = urllib.request.Request(
+            f"{self.api_url}/internal/tools/execute",
+            data=json.dumps(
+                {
+                    "toolId": "filesystem.workspace.context.update",
+                    "action": "execute",
+                    "payload": payload,
+                }
+            ).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            resp.read()
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        payload = {
+            "workspaceRoot": workspace_root,
+            "missionId": mission_id,
+            "fileName": filename,
+            "content": content,
+        }
+        return await asyncio.to_thread(self._do_write_artifact, payload)
+
+    def _do_write_artifact(self, payload: dict) -> str:
+        req = urllib.request.Request(
+            f"{self.api_url}/internal/tools/execute",
+            data=json.dumps(
+                {
+                    "toolId": "filesystem.artifact.write",
+                    "action": "execute",
+                    "payload": payload,
+                }
+            ).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            raw = resp.read()
+            data = json.loads(raw)
+            return data.get("payload", {}).get("absolutePath") or payload.get("fileName", "artifact")
+
+    def artifact_paths(self, mission_id: str) -> list[str]:
+        # Remote artifact paths could be fetched from audit or mission telemetry.
+        # For now, returning an indicator.
+        return ["remote://artifacts/" + mission_id]
+
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
+    provider: str = "ollama"
+    model: str = "glm-5:cloud"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title, "capability": step.capability},
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+            "model": {
+                "provider": template.provider or self.provider,
+                "model": template.model or self.model,
+            },
+        }
+
+    def execute_task(self, request):
+        # execute_task is called from SubAgentService which is NOT async in executor.py
+        # Actually run_step IS async, so we might want to make execute_task async too?
+        # But for now, let's keep it sync as it is.
+        req = urllib.request.Request(
+            f"{self.api_url}/internal/runtime/execute",
+            data=json.dumps(request).encode("utf-8"),
+            headers=self._headers(),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+            return json.loads(resp.read())
 
 
 @dataclass
