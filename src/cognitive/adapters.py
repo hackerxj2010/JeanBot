@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
+import urllib.request
+import asyncio
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -399,3 +402,217 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpBaseService:
+    api_url: str
+    internal_token: str
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "jeanbot-python",
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            auth_bytes = json.dumps(auth_context).encode("utf-8")
+            headers["x-jeanbot-auth-context"] = base64.b64encode(auth_bytes).decode("utf-8")
+        return headers
+
+    def _do_sync_request(
+        self, path: str, method: str, body: dict | None = None, auth_context: dict | None = None
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = self._build_headers(auth_context)
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    async def _post(self, path: str, body: dict, auth_context: dict | None = None) -> Any:
+        return await asyncio.to_thread(self._do_sync_request, path, "POST", body, auth_context)
+
+    async def _get(self, path: str, auth_context: dict | None = None) -> Any:
+        return await asyncio.to_thread(self._do_sync_request, path, "GET", None, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._post(
+            "/internal/audit/record",
+            {"kind": event, "entityId": entity_id, "actor": service, "details": data},
+        )
+
+
+@dataclass
+class HttpMemoryService(HttpBaseService):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._post(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            {"text": text, "tags": tags, "scope": memory_type, "importance": importance},
+        )
+
+    async def search(
+        self,
+        workspace_id: str,
+        query: str,
+        limit: int = 5,
+    ) -> list[MemoryRecord]:
+        results = await self._post(
+            f"/internal/memory/workspaces/{workspace_id}/search", {"query": query, "limit": limit}
+        )
+        return [
+            MemoryRecord(
+                workspace_id=workspace_id,
+                text=r["text"],
+                tags=r["tags"],
+                memory_type=r["metadata"].get("scope", "short-term"),
+                importance=r["importance"],
+            )
+            for r in results.get("results", [])
+        ]
+
+
+@dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        await self._post(
+            "/internal/files/workspace/context",
+            {
+                "workspaceRoot": workspace_root,
+                "missionTitle": mission_title,
+                "completed": completed_steps,
+                "inProgress": running_steps,
+                "upcoming": pending_steps,
+            },
+        )
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        res = await self._post(
+            "/internal/files/artifact",
+            {
+                "workspaceRoot": workspace_root,
+                "missionId": mission_id,
+                "fileName": filename,
+                "content": content,
+            },
+        )
+        return res.get("path", "")
+
+
+@dataclass
+class HttpPolicyService(HttpBaseService):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Use synchronous request to comply with Protocol without blocking event loop incorrectly
+        res = self._do_sync_request(
+            "/internal/policy/evaluate", "POST", mission_data, mission_data.get("auth_context")
+        )
+        return PolicyDecision(
+            approval_required=res.get("approvalRequired", False), risk=res.get("risk", "low")
+        )
+
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "objective": asdict(objective),
+            "step": asdict(step),
+            "plan": {"id": f"plan-{objective.id}", "version": plan.version},
+            "template": asdict(template),
+            "context": asdict(context),
+        }
+
+    async def execute_task(self, request: dict) -> dict:
+        return await self._post("/internal/runtime/execute", request, request.get("authContext"))
+
+
+@dataclass
+class HttpSubAgentService(HttpBaseService):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        res = self._do_sync_request(
+            "/internal/subagents/templates/spawn", "POST", {"steps": [asdict(s) for s in plan.steps]}
+        )
+        return [
+            SubAgentTemplate(
+                specialization=t["specialization"],
+                role=t["role"],
+                provider=t.get("provider"),
+                model=t.get("model"),
+                tool_ids=t.get("toolIds"),
+                max_parallel_tasks=t.get("maxParallelTasks", 1),
+            )
+            for t in res
+        ]
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        payload = {
+            "missionId": params["mission_id"],
+            "objective": asdict(params["objective"]),
+            "plan": {
+                "id": f"plan-{params['mission_id']}",
+                "steps": [asdict(s) for s in params["plan"].steps],
+            },
+            "step": asdict(params["step"]),
+            "template": asdict(params["template"]),
+            "context": asdict(params["context"]),
+            "authContext": params.get("auth_context"),
+            "attempt": params.get("attempt", 1),
+        }
+        res = await self._post("/internal/subagents/run", payload, params.get("auth_context"))
+
+        report = res["stepReport"]
+        diag = report.get("diagnostics")
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=report["stepId"],
+                started_at=report["startedAt"],
+                attempts=report["attempts"],
+                summary=report["summary"],
+                diagnostics=StepExecutionDiagnostics(
+                    overall_score=diag.get("overallScore", 0.0),
+                    evidence_score=diag.get("evidenceScore", 0.0),
+                    coverage_score=diag.get("coverageScore", 0.0),
+                    verification_score=diag.get("verificationScore", 0.0),
+                    failure_class=diag.get("failureClass", "none"),
+                    retryable=diag.get("retryable", False),
+                    escalation_required=diag.get("escalationRequired", False),
+                    missing_signals=diag.get("missingSignals", []),
+                    recommended_actions=diag.get("recommendedActions", []),
+                )
+                if diag
+                else None,
+            ),
+            run=res["run"],
+            output=res["output"],
+            memory_text=res["memory_text"],
+        )
