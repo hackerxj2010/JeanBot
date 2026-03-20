@@ -1,21 +1,30 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
+import urllib.request
+import asyncio
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .executor import (
+    AgentRuntimeService,
+    AuditService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionObjective,
     MissionPlan,
     MissionStep,
     PolicyDecision,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
     SubAgentExecutionResult,
+    SubAgentService,
     SubAgentTemplate,
 )
 
@@ -399,3 +408,108 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    token: str
+    service_name: str
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.token,
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+    def _do_request_sync(self, path: str, method: str, body: dict | None = None, auth_context: dict | None = None) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = self._build_headers(auth_context)
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    async def _post(self, path: str, body: dict, auth_context: dict | None = None) -> Any:
+        return await asyncio.to_thread(self._do_request_sync, path, "POST", body, auth_context)
+
+    async def _get(self, path: str, auth_context: dict | None = None) -> Any:
+        return await asyncio.to_thread(self._do_request_sync, path, "GET", None, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    service_name: str = "agent-orchestrator"
+
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        try:
+            await self._post(
+                "/internal/audit",
+                {"kind": event, "entityId": entity_id, "actor": service, "details": data},
+            )
+        except Exception:
+            pass
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    service_name: str = "memory-service"
+
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._post(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            {"text": text, "tags": tags, "scope": memory_type, "importance": importance},
+        )
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    service_name: str = "policy-service"
+
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        try:
+            res = self._do_request_sync("/internal/policy/evaluate", "POST", mission_data)
+            return PolicyDecision(
+                approval_required=res.get("approvalRequired", False), risk=res.get("risk", "low")
+            )
+        except Exception:
+            return PolicyDecision(approval_required=False, risk="low")
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    service_name: str = "agent-runtime"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title, "capability": step.capability},
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "model": {"provider": template.provider, "model": template.model},
+        }
+
+    def execute_task(self, request):
+        return self._do_request_sync("/internal/runtime/execute", "POST", request, request.get("auth_context"))

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -19,6 +20,22 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser = subparsers.add_parser("execute", help="Execute a mission payload")
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    execute_parser.add_argument(
+        "--mode",
+        choices=["local", "http"],
+        default=os.environ.get("JEANBOT_SERVICE_MODE", "local"),
+        help="Service orchestration mode",
+    )
+    execute_parser.add_argument(
+        "--api-url",
+        default=os.environ.get("JEANBOT_API_URL", "http://localhost:8080"),
+        help="Backend API URL for http mode",
+    )
+    execute_parser.add_argument(
+        "--token",
+        default=os.environ.get("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"),
+        help="Internal service token for http mode",
+    )
 
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
@@ -26,6 +43,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    finalize_parser.add_argument(
+        "--mode",
+        choices=["local", "http"],
+        default=os.environ.get("JEANBOT_SERVICE_MODE", "local"),
+        help="Service orchestration mode",
+    )
+    finalize_parser.add_argument(
+        "--api-url",
+        default=os.environ.get("JEANBOT_API_URL", "http://localhost:8080"),
+        help="Backend API URL for http mode",
+    )
+    finalize_parser.add_argument(
+        "--token",
+        default=os.environ.get("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"),
+        help="Internal service token for http mode",
+    )
 
     return parser
 
@@ -36,7 +69,12 @@ async def run_command(args: argparse.Namespace) -> dict:
         path = service.write_payload_template(args.output)
         return {"command": "write-template", "output": str(Path(path))}
 
-    service = MissionExecutorService(workspace_root=args.workspace_root)
+    service = MissionExecutorService(
+        workspace_root=args.workspace_root,
+        service_mode=args.mode,
+        api_url=args.api_url,
+        internal_token=args.token,
+    )
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)

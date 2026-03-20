@@ -391,6 +391,7 @@ class AdaptiveReplanner:
         
         failure_class = diagnostics.failure_class if diagnostics else "unknown"
         
+        # Enhanced retry strategy for transient-like failures
         if failure_class == "verification_failed" and attempts < 3:
             decision_entries.append({
                 "step_id": step.id,
@@ -398,7 +399,7 @@ class AdaptiveReplanner:
                 "severity": "info",
                 "scope": "step",
                 "summary": f"Step failed verification, will retry with adjusted approach",
-                "reasoning": f"Failure class: {failure_class}, attempts: {attempts}",
+                "reasoning": f"Failure class: {failure_class}, attempts: {attempts}. Verifier feedback suggests refinements are needed.",
                 "recommended_actions": ["Adjust instructions", "Simplify step objective"],
                 "metadata": {"attempts": attempts},
                 "created_at": utc_now_iso(),
@@ -413,13 +414,28 @@ class AdaptiveReplanner:
                 "severity": "warning",
                 "scope": "step",
                 "summary": "Step produced no output, retrying with expanded context",
-                "reasoning": "Empty output indicates model needs more context",
+                "reasoning": "Empty output indicates model needs more grounding context or clearer instruction set.",
                 "recommended_actions": ["Add more context to prompt", "Break into smaller steps"],
                 "metadata": {"attempts": attempts},
                 "created_at": utc_now_iso(),
                 "plan_version": record.plan_version or 1,
             })
             patched = True
+
+        elif "HTTP Error" in error_message or "urlopen" in error_message:
+            decision_entries.append({
+                "step_id": step.id,
+                "category": "transient_failure",
+                "severity": "warning",
+                "scope": "service",
+                "summary": "Detected service communication error, scheduling retry",
+                "reasoning": f"Transient error: {error_message}",
+                "recommended_actions": ["Exponential backoff", "Check backend availability"],
+                "metadata": {"attempts": attempts},
+                "created_at": utc_now_iso(),
+                "plan_version": record.plan_version or 1,
+            })
+            patched = attempts < 3
             
         elif attempts >= 3:
             decision_entries.append({
@@ -429,7 +445,7 @@ class AdaptiveReplanner:
                 "scope": "step",
                 "summary": f"Step failed after {attempts} attempts: {error_message}",
                 "reasoning": f"Exhausted retry limit for failure class: {failure_class}",
-                "recommended_actions": ["Mark step as failed", "Consider alternative approach"],
+                "recommended_actions": ["Mark step as failed", "Consider alternative approach", "Human intervention required"],
                 "metadata": {"attempts": attempts, "failure_class": failure_class},
                 "created_at": utc_now_iso(),
                 "plan_version": record.plan_version or 1,
