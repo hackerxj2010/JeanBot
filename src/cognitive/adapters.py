@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,7 @@ from .executor import (
     StepExecutionRecord,
     SubAgentExecutionResult,
     SubAgentTemplate,
+    utc_now_iso,
 )
 
 
@@ -254,6 +258,234 @@ class DeterministicRuntimeService:
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    service_name: str = "agent-orchestrator"
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+    async def request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = self._build_headers(auth_context)
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+
+        def _do_request():
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req) as resp:
+                if resp.status == 204:
+                    return None
+                return json.loads(resp.read().decode("utf-8"))
+
+        return await asyncio.to_thread(_do_request)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self.request(
+            "/internal/audit",
+            method="POST",
+            body={
+                "kind": event,
+                "entityId": entity_id,
+                "actor": service,
+                "details": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "message": "Summary not available in HTTP mode"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self.request(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body={
+                "text": text,
+                "tags": tags,
+                "scope": "long-term" if memory_type == "long-term" else "session",
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {
+            "workspace_id": workspace_id,
+            "mode": "http",
+            "message": "Summary not available in HTTP mode",
+        }
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        return PolicyDecision(approval_required=False, risk="low")
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    provider: str = "ollama"
+    model: str = "glm-5:cloud"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {
+                "id": objective.id,
+                "title": objective.title,
+            },
+            "step": {
+                "id": step.id,
+                "title": step.title,
+                "capability": step.capability,
+            },
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+            "model": {
+                "provider": template.provider or self.provider,
+                "model": template.model or self.model,
+            },
+        }
+
+    async def execute_task(self, request_payload: dict) -> dict[str, Any]:
+        return await self.request(
+            "/internal/runtime/execute",
+            method="POST",
+            body=request_payload,
+            auth_context=request_payload.get("authContext"),
+        )
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    capability_tools: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "research": ["web_search", "browser_extract", "read_file"],
+            "browser": ["browser_navigate", "browser_extract", "browser_capture"],
+            "terminal": ["terminal_exec", "read_file", "write_file"],
+            "software-development": ["read_file", "write_file", "terminal_exec"],
+            "delivery": ["read_file", "write_file"],
+            "verification": ["read_file", "terminal_exec"],
+        }
+    )
+    role_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "research": "researcher",
+            "browser": "browser",
+            "terminal": "coder",
+            "software-development": "coder",
+            "delivery": "writer",
+            "verification": "analyst",
+        }
+    )
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        templates: list[SubAgentTemplate] = []
+        seen: set[str] = set()
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=self.role_map.get(step.capability, "generalist"),
+                    provider="ollama",
+                    model="glm-5:cloud",
+                    tool_ids=self.capability_tools.get(step.capability, ["read_file"]),
+                    max_parallel_tasks=2 if step.capability in {"research", "browser"} else 1,
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        mission_id = params["mission_id"]
+        objective = params["objective"]
+        plan = params["plan"]
+        step = params["step"]
+        template = params["template"]
+        context = params["context"]
+        auth_context = params.get("auth_context")
+
+        runtime_request = {
+            "objective": asdict(objective),
+            "step": asdict(step),
+            "plan": {
+                "version": plan.version,
+                "steps": [asdict(s) for s in plan.steps],
+            },
+            "template": asdict(template),
+            "context": asdict(context),
+            "authContext": auth_context,
+        }
+
+        output = await self.request(
+            "/internal/runtime/execute",
+            method="POST",
+            body=runtime_request,
+            auth_context=auth_context,
+        )
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at=utc_now_iso(),
+                attempts=params.get("attempt", 1),
+                summary=output.get("finalText", "")[:100],
+            ),
+            run={
+                "id": f"run-{step.id}",
+                "capability": step.capability,
+                "templateRole": template.role,
+                "status": "completed",
+                "provider": output.get("provider"),
+                "model": output.get("model"),
+            },
+            output=output,
+            memory_text=output.get("finalText", ""),
+        )
 
 
 @dataclass
