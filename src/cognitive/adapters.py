@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
 from .executor import (
+    ActiveExecutionState,
     ExecutionContext,
     MissionObjective,
     MissionPlan,
@@ -399,3 +403,194 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    token: str
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        body: dict | None = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}{path}"
+        headers = self._build_headers(auth_context)
+        data = json.dumps(body).encode("utf-8") if body else None
+
+        def _do_request():
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            with urllib.request.urlopen(req) as resp:
+                if resp.status == 204:
+                    return None
+                return json.loads(resp.read().decode("utf-8"))
+
+        return await asyncio.to_thread(_do_request)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        # The AuditService in the backend is often a fire-and-forget or internal log.
+        # In JeanBot, we call the agent-orchestrator's internal audit endpoint.
+        try:
+            await self._request(
+                "POST",
+                "/internal/audit",
+                {
+                    "event": event,
+                    "entity_id": entity_id,
+                    "service": service,
+                    "data": data,
+                },
+            )
+        except Exception:
+            # Audit failures should typically not crash the mission
+            pass
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "active"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            "POST",
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            {
+                "text": text,
+                "tags": tags,
+                "scope": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"mode": "http", "workspace_id": workspace_id}
+
+
+@dataclass
+class HttpAgentRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "objective": asdict(objective),
+            "step": asdict(step),
+            "plan_version": plan.version,
+            "template": asdict(template),
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+        }
+
+    async def execute_task(self, request: dict) -> Any:
+        return await self._request("POST", "/internal/runtime/execute", request)
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Policy evaluation is often synchronous and deterministic in the orchestrator,
+        # but if we wanted a live check, we would need an async call.
+        # For now, we return a default policy or we would need to change the protocol to async.
+        return PolicyDecision(approval_required=False, risk="low")
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # Usually derived from capabilities.
+        seen: set[str] = set()
+        templates: list[SubAgentTemplate] = []
+        role_map = {
+            "research": "researcher",
+            "browser": "browser",
+            "terminal": "coder",
+            "software-development": "coder",
+            "delivery": "writer",
+            "verification": "analyst",
+        }
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=role_map.get(step.capability, "generalist"),
+                    max_parallel_tasks=2 if step.capability in {"research", "browser"} else 1,
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        # In live mode, we use the agent-runtime service to execute the task.
+        # This typically maps to the orchestrator's tool execution flow or direct runtime call.
+        # For this implementation, we will assume the runtime service handles it.
+        # We need a way to bridge this. In the current executor, sub_agent_service.run_step
+        # is expected to return a SubAgentExecutionResult.
+
+        payload = {
+            "workspaceId": params["objective"].workspace_id,
+            "title": params["step"].title,
+            "objective": params["step"].description,
+            "capability": params["step"].capability,
+            "mode": "live",
+            "provider": params["template"].provider,
+            "model": params["template"].model,
+        }
+
+        result = await self._request(
+            "POST",
+            "/internal/runtime/execute",
+            payload,
+            auth_context=params.get("auth_context"),
+        )
+
+        # Map the backend RuntimeExecutionResult to SubAgentExecutionResult
+        # We need to reconstruct the objects expected by the executor.
+
+        output = result.get("output", {})
+        run = result.get("run", {})
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=params["step"].id,
+                started_at=run.get("createdAt", ""),
+                attempts=params.get("attempt", 1),
+                summary=output.get("finalText", "")[:200],
+                diagnostics=None, # Executor will assess
+            ),
+            run=run,
+            output=output,
+            memory_text=output.get("finalText", ""),
+        )

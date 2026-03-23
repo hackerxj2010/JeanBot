@@ -19,6 +19,9 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser = subparsers.add_parser("execute", help="Execute a mission payload")
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    execute_parser.add_argument("--mode", choices=["local", "http"], help="Execution mode")
+    execute_parser.add_argument("--api-url", help="JeanBot API URL (for http mode)")
+    execute_parser.add_argument("--token", help="Internal service token (for http mode)")
 
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
@@ -26,6 +29,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    finalize_parser.add_argument("--mode", choices=["local", "http"], help="Execution mode")
+    finalize_parser.add_argument("--api-url", help="JeanBot API URL (for http mode)")
+    finalize_parser.add_argument("--token", help="Internal service token (for http mode)")
 
     return parser
 
@@ -36,7 +42,15 @@ async def run_command(args: argparse.Namespace) -> dict:
         path = service.write_payload_template(args.output)
         return {"command": "write-template", "output": str(Path(path))}
 
-    service = MissionExecutorService(workspace_root=args.workspace_root)
+    kwargs = {"workspace_root": args.workspace_root}
+    if hasattr(args, "mode") and args.mode:
+        kwargs["mode"] = args.mode
+    if hasattr(args, "api_url") and args.api_url:
+        kwargs["api_url"] = args.api_url
+    if hasattr(args, "token") and args.token:
+        kwargs["token"] = args.token
+
+    service = MissionExecutorService(**kwargs)
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)
