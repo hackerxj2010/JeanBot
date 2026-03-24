@@ -1,12 +1,22 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from src.cognitive.cli import main as cli_main
 from src.cognitive.service import MissionExecutorService
+from src.cognitive.adapters import (
+    HttpAuditService,
+    HttpMemoryService,
+    HttpPolicyService,
+    HttpRuntimeService,
+    HttpSubAgentService,
+    LocalAuditService,
+)
 
 
 class MissionExecutorServiceTests(unittest.IsolatedAsyncioTestCase):
@@ -97,6 +107,28 @@ class MissionExecutorServiceTests(unittest.IsolatedAsyncioTestCase):
 
             self.assertEqual(result.execution_mode, "distributed")
             self.assertEqual([report.step_id for report in result.step_reports], ["step-a", "step-b"])
+
+    async def test_build_bundle_switches_to_http_adapters(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = MissionExecutorService(workspace_root=tmpdir)
+            payload = {
+                "workspace_id": "workspace-http",
+                "title": "HTTP Mission",
+                "objective": "Test HTTP adapter switching.",
+            }
+
+            with patch.dict(os.environ, {"JEANBOT_SERVICE_MODE": "http", "JEANBOT_API_URL": "http://api:8080"}):
+                bundle = service.build_bundle(payload)
+                self.assertIsInstance(bundle.audit_service, HttpAuditService)
+                self.assertIsInstance(bundle.memory_service, HttpMemoryService)
+                self.assertIsInstance(bundle.policy_service, HttpPolicyService)
+                self.assertIsInstance(bundle.runtime_service, HttpRuntimeService)
+                self.assertIsInstance(bundle.subagent_service, HttpSubAgentService)
+                self.assertEqual(bundle.audit_service.api_url, "http://api:8080")
+
+            with patch.dict(os.environ, {"JEANBOT_SERVICE_MODE": "local"}):
+                bundle = service.build_bundle(payload)
+                self.assertIsInstance(bundle.audit_service, LocalAuditService)
 
 
 class MissionExecutorCliTests(unittest.TestCase):

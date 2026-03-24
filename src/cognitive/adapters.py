@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -399,3 +402,168 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    service_name: str = "cognitive-python"
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            context_json = json.dumps(auth_context)
+            encoded_context = base64.b64encode(context_json.encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded_context
+        return headers
+
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = self._build_headers(auth_context)
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req) as response:
+            if response.status == 204:
+                return None
+            return json.loads(response.read().decode("utf-8"))
+
+    async def _request_async(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        return await asyncio.to_thread(self._request, path, method, body, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request_async(
+            "/internal/audit",
+            method="POST",
+            body={
+                "kind": event,
+                "entityId": entity_id,
+                "actor": service,
+                "details": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "active"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request_async(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body={
+                "text": text,
+                "tags": tags,
+                "scope": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http"}
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        objective_text = mission_data.get("objective", "")
+        title = mission_data.get("title", "")
+        risk = "low"
+        lowered = f"{title}\n{objective_text}".lower()
+        if any(kw in lowered for kw in ["payment", "invoice", "purchase"]):
+            risk = "critical"
+        elif any(kw in lowered for kw in ["email", "slack", "production", "deploy"]):
+            risk = "high"
+
+        approval_required = risk in {"high", "critical"}
+        return PolicyDecision(approval_required=approval_required, risk=risk)
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return DeterministicRuntimeService().prepare_frame(
+            objective, step, plan, template, context
+        )
+
+    def execute_task(self, request: dict) -> Any:
+        return self._request("/internal/runtime/execute", method="POST", body=request)
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        return DeterministicSubAgentService().spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        runtime_request = {
+            "workspaceId": params["objective"].workspace_id,
+            "title": params["step"].title,
+            "objective": params["step"].description,
+            "capability": params["step"].capability,
+            "provider": params["template"].provider,
+            "model": params["template"].model,
+            "mode": "live",
+        }
+
+        output = await self._request_async(
+            "/api/runtime/execute",
+            method="POST",
+            body=runtime_request,
+            auth_context=params.get("auth_context")
+        )
+
+        step_report = StepExecutionRecord(
+            step_id=params["step"].id,
+            started_at=output.get("startedAt", ""),
+            attempts=params.get("attempt", 1),
+            summary=output.get("finalText", "")[:200],
+        )
+
+        return SubAgentExecutionResult(
+            step_report=step_report,
+            run={
+                "id": output.get("runId", f"http-{params['step'].id}"),
+                "capability": params["step"].capability,
+                "status": output.get("status", "completed"),
+                "provider": output.get("provider"),
+                "model": output.get("model"),
+            },
+            output=output,
+            memory_text=f"{params['step'].title}: {output.get('finalText', '')[:200]}",
+        )
