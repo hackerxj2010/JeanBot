@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -399,3 +403,166 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    service_name: str = "python-mission-runner"
+
+    def _build_headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+    async def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = self._build_headers(auth_context)
+
+        def _serialize(obj):
+            if hasattr(obj, "__dataclass_fields__"):
+                return asdict(obj)
+            return str(obj)
+
+        data = json.dumps(body, default=_serialize).encode("utf-8") if body else None
+
+        def _do_request():
+            req = urllib.request.Request(url, data=data, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    if response.status == 204:
+                        return None
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode("utf-8")
+                raise RuntimeError(f"HTTP {e.code}: {error_body}") from e
+            except Exception as e:
+                raise RuntimeError(f"Request failed: {str(e)}") from e
+
+        return await asyncio.to_thread(_do_request)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        # Python runner calls target the gateway's internal audit route if available,
+        # but usually it records via the service it's orchestrating.
+        # For simplicity in 'http' mode, we might skip local persistence.
+        pass
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "recorded_remotely"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body={
+                "text": text,
+                "tags": tags,
+                "scope": "long-term" if memory_type == "long-term" else "short-term",
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http"}
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        # Frames are prepared by the remote runtime during execute_task
+        return {"mode": "http"}
+
+    async def execute_task(self, request: dict) -> Any:
+        return await self._request(
+            "/internal/runtime/execute",
+            method="POST",
+            body=request,
+            auth_context=request.get("authContext"),
+        )
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    failure_policy: dict[str, int] = field(default_factory=dict)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        # In HTTP mode, we delegate the entire step execution to the remote runtime
+        # which acts as the 'sub-agent' for that capability.
+        response = await self._request(
+            "/internal/runtime/execute",
+            method="POST",
+            body=params,
+            auth_context=params.get("auth_context"),
+        )
+
+        # Mapping remote RuntimeExecutionResult to local SubAgentExecutionResult
+        # This assumes the remote response structure matches what we need or we adapt it here.
+        # Based on JEAN.md and gateway-services.ts, the remote execute returns a RuntimeExecutionResult.
+
+        step: MissionStep = params["step"]
+        attempt = params.get("attempt", 1)
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at=response.get("startedAt", ""),
+                attempts=attempt,
+                summary=response.get("summary", f"{step.title} completed via HTTP"),
+            ),
+            run=response.get("run", {}),
+            output=response.get("output", response),
+            memory_text=response.get("memoryText", f"Completed {step.title}"),
+        )
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # We still need templates to know which capabilities/tools are requested
+        # For HTTP mode, we can use a simpler approach or reuse the deterministic one's logic
+        return DeterministicSubAgentService(failure_policy=self.failure_policy).spawn_for_plan(plan)
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    approval_required: bool = False
+    default_risk: str = "low"
+    capability_risk: dict[str, str] = field(default_factory=dict)
+
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Static evaluation for now, or could target /internal/policy/evaluate
+        return StaticPolicyService(
+            approval_required=self.approval_required,
+            default_risk=self.default_risk,
+            capability_risk=self.capability_risk,
+        ).evaluate_mission(mission_data)

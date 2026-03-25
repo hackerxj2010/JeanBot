@@ -390,8 +390,23 @@ class AdaptiveReplanner:
             }
         
         failure_class = diagnostics.failure_class if diagnostics else "unknown"
-        
-        if failure_class == "verification_failed" and attempts < 3:
+
+        if "HTTP 502" in error_message or "HTTP 503" in error_message or "HTTP 504" in error_message:
+            decision_entries.append({
+                "step_id": step.id,
+                "category": "retry_strategy",
+                "severity": "warning",
+                "scope": "step",
+                "summary": "Transient HTTP error detected, retrying autonomously",
+                "reasoning": f"Remote service returned transient error: {error_message}",
+                "recommended_actions": ["Retry with exponential backoff"],
+                "metadata": {"attempts": attempts, "error": error_message},
+                "created_at": utc_now_iso(),
+                "plan_version": record.plan_version or 1,
+            })
+            patched = True
+
+        elif failure_class == "verification_failed" and attempts < 3:
             decision_entries.append({
                 "step_id": step.id,
                 "category": "retry_strategy",
@@ -422,14 +437,15 @@ class AdaptiveReplanner:
             patched = True
             
         elif attempts >= 3:
+            severity = "critical" if step.stage == "delivery" else "error"
             decision_entries.append({
                 "step_id": step.id,
                 "category": "step_failure",
-                "severity": "error",
+                "severity": severity,
                 "scope": "step",
                 "summary": f"Step failed after {attempts} attempts: {error_message}",
                 "reasoning": f"Exhausted retry limit for failure class: {failure_class}",
-                "recommended_actions": ["Mark step as failed", "Consider alternative approach"],
+                "recommended_actions": ["Mark step as failed", "Escalate to operator"],
                 "metadata": {"attempts": attempts, "failure_class": failure_class},
                 "created_at": utc_now_iso(),
                 "plan_version": record.plan_version or 1,
