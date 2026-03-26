@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+import asyncio
+
+from typing import Protocol
 
 from .executor import (
     ExecutionContext,
@@ -20,6 +26,53 @@ from .executor import (
 )
 
 
+class AgentRuntimeService(Protocol):
+    def prepare_frame(self, objective, step, plan, template, context): ...
+    def execute_task(self, request): ...
+
+
+class AuditService(Protocol):
+    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+
+
+class MemoryService(Protocol):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ): ...
+
+
+class FileService(Protocol):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ): ...
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str: ...
+
+
+class PolicyService(Protocol):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
+
+
+class SubAgentService(Protocol):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
+    async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
+
+
 def ensure_directory(path: Path) -> Path:
     path.mkdir(parents=True, exist_ok=True)
     return path
@@ -31,6 +84,16 @@ def stable_hash(value: str) -> str:
 
 def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def _serialize(obj: Any) -> Any:
+    if hasattr(obj, "__dataclass_fields__"):
+        return asdict(obj)
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    return obj
 
 
 @dataclass
@@ -399,3 +462,236 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    token: str
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}{path}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+
+        data = None
+        if body is not None:
+            data = json.dumps(body, default=_serialize).encode("utf-8")
+
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req) as response:
+                if response.status == 204:
+                    return None
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8")
+            raise RuntimeError(f"HTTP {e.code} for {url}: {error_body}") from e
+
+    async def _request_async(
+        self,
+        method: str,
+        path: str,
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        return await asyncio.to_thread(self._request, method, path, body, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request_async(
+            "POST",
+            "/internal/audit",
+            body={
+                "kind": event,
+                "entityId": entity_id,
+                "actor": service,
+                "details": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {
+            "mode": "http",
+            "summary": "Audit records are persisted remotely via Audit Service.",
+        }
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request_async(
+            "POST",
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            body={
+                "text": text,
+                "tags": tags,
+                "type": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {
+            "workspace_id": workspace_id,
+            "mode": "http",
+            "summary": "Memories are persisted remotely via Memory Service.",
+        }
+
+
+@dataclass
+class HttpFileService(HttpServiceBase):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        # In HTTP mode, context updates might be handled by the orchestrator service
+        # or we could implement a file-service call here if needed.
+        pass
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        # Call internal endpoint to write artifact
+        result = await self._request_async(
+            "POST",
+            f"/internal/files/workspaces/artifacts/{mission_id}",
+            body={"filename": filename, "content": content},
+        )
+        return result.get("path", filename)
+
+    def artifact_paths(self, mission_id: str) -> list[str]:
+        # Remote list if needed
+        return []
+
+
+@dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        result = self._request(
+            "POST",
+            "/internal/policy/evaluate",
+            body=mission_data,
+        )
+        return PolicyDecision(
+            approval_required=result.get("approvalRequired", False),
+            risk=result.get("risk", "low"),
+        )
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    provider: str = "ollama"
+    model: str = "glm-5:cloud"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title, "capability": step.capability},
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+            "model": {
+                "provider": template.provider or self.provider,
+                "model": template.model or self.model,
+            },
+        }
+
+    def execute_task(self, request):
+        return self._request(
+            "POST",
+            "/internal/runtime/execute",
+            body=request,
+            auth_context=request.get("authContext"),
+        )
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        try:
+            # Try to get specialized templates from backend
+            items = self._request("GET", "/internal/subagents/templates")
+            return [SubAgentTemplate(**item) for item in items]
+        except Exception:
+            # Fallback to deterministic local logic
+            return DeterministicSubAgentService().spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        # Per memory, sub-agents use the Gateway's /api/runtime/execute
+        result = await self._request_async(
+            "POST",
+            "/api/runtime/execute",
+            body={
+                "workspaceId": params["objective"].workspace_id,
+                "title": params["step"].title,
+                "objective": params["step"].description,
+                "capability": params["step"].capability,
+                "provider": params["template"].provider,
+                "model": params["template"].model,
+                "mode": "live",
+            },
+            auth_context=params.get("auth_context"),
+        )
+
+        # Map backend response to SubAgentExecutionResult
+        # The backend returns a RuntimeExecutionResult which has output, run, metrics, etc.
+        output = result.get("output", {})
+        run = result.get("run", {})
+
+        # Build step report
+        step_report = StepExecutionRecord(
+            step_id=params["step"].id,
+            started_at=run.get("startedAt", ""),
+            attempts=int(params.get("attempt", 1)),
+            summary=output.get("finalText", "No summary provided."),
+        )
+
+        return SubAgentExecutionResult(
+            step_report=step_report,
+            run=run,
+            output=output,
+            memory_text=output.get("finalText", ""),
+        )

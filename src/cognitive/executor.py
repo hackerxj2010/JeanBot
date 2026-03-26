@@ -173,51 +173,6 @@ class MissionRunResult:
     finished_at: str
 
 
-class AgentRuntimeService(Protocol):
-    def prepare_frame(self, objective, step, plan, template, context): ...
-    def execute_task(self, request): ...
-
-
-class AuditService(Protocol):
-    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
-
-
-class MemoryService(Protocol):
-    async def remember(
-        self,
-        workspace_id: str,
-        text: str,
-        tags: list[str],
-        memory_type: str,
-        importance: float,
-    ): ...
-
-
-class FileService(Protocol):
-    async def update_workspace_context(
-        self,
-        workspace_root: str,
-        mission_title: str,
-        completed_steps: list[str],
-        running_steps: list[str],
-        pending_steps: list[str],
-    ): ...
-    async def write_artifact(
-        self,
-        workspace_root: str,
-        mission_id: str,
-        filename: str,
-        content: str,
-    ) -> str: ...
-
-
-class PolicyService(Protocol):
-    def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
-
-
-class SubAgentService(Protocol):
-    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
-    async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
 
 
 class MissionExecutionIntelligence:
@@ -390,8 +345,29 @@ class AdaptiveReplanner:
             }
         
         failure_class = diagnostics.failure_class if diagnostics else "unknown"
-        
-        if failure_class == "verification_failed" and attempts < 3:
+
+        # Autonomous retry logic for transient HTTP errors
+        is_transient_http = any(
+            code in error_message for code in ["502", "503", "504", "Connection refused"]
+        )
+        if is_transient_http and attempts < 3:
+            decision_entries.append(
+                {
+                    "step_id": step.id if step else record.objective.id,
+                    "category": "retry_strategy",
+                    "severity": "warning",
+                    "scope": "network",
+                    "summary": "Transient network error detected, retrying autonomously",
+                    "reasoning": f"HTTP error or connection issue: {error_message}",
+                    "recommended_actions": ["Retry with backoff"],
+                    "metadata": {"attempts": attempts, "error": error_message},
+                    "created_at": utc_now_iso(),
+                    "plan_version": record.plan_version or 1,
+                }
+            )
+            patched = True
+
+        elif failure_class == "verification_failed" and attempts < 3:
             decision_entries.append({
                 "step_id": step.id,
                 "category": "retry_strategy",
