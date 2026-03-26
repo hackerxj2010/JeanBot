@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import Sequence
 
@@ -19,6 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser = subparsers.add_parser("execute", help="Execute a mission payload")
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    execute_parser.add_argument("--mode", choices=["local", "http"], help="Service mode override")
+    execute_parser.add_argument("--api-url", help="API gateway URL override")
+    execute_parser.add_argument("--token", help="Internal service token override")
 
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
@@ -26,6 +30,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    finalize_parser.add_argument("--mode", choices=["local", "http"], help="Service mode override")
+    finalize_parser.add_argument("--api-url", help="API gateway URL override")
+    finalize_parser.add_argument("--token", help="Internal service token override")
 
     return parser
 
@@ -36,7 +43,12 @@ async def run_command(args: argparse.Namespace) -> dict:
         path = service.write_payload_template(args.output)
         return {"command": "write-template", "output": str(Path(path))}
 
-    service = MissionExecutorService(workspace_root=args.workspace_root)
+    service = MissionExecutorService(
+        workspace_root=args.workspace_root,
+        service_mode=args.mode or os.getenv("JEANBOT_SERVICE_MODE", "local"),
+        api_url=args.api_url or os.getenv("JEANBOT_API_URL", "http://127.0.0.1:8080"),
+        internal_token=args.token or os.getenv("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"),
+    )
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)
