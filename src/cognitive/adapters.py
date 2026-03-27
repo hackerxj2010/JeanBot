@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.request
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +35,50 @@ def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def _serialize(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, (list, tuple)):
+        return [_serialize(i) for i in obj]
+    if isinstance(obj, dict):
+        return {k: _serialize(v) for k, v in obj.items()}
+    return obj
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    token: str
+    service_name: str
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.token,
+        }
+
+    async def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        data: Any = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = self._headers()
+
+        body = None
+        if data is not None:
+            body = json.dumps(_serialize(data)).encode("utf-8")
+
+        def _do_request():
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        return await asyncio.to_thread(_do_request)
+
+
 @dataclass
 class AuditEventRecord:
     event: str
@@ -48,6 +94,24 @@ class MemoryRecord:
     tags: list[str]
     memory_type: str
     importance: float
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request(
+            "/internal/audit",
+            method="POST",
+            data={
+                "event": event,
+                "entityId": entity_id,
+                "service": service,
+                "data": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "active"}
 
 
 @dataclass
@@ -78,6 +142,31 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            data={
+                "text": text,
+                "tags": tags,
+                "memoryType": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http", "status": "active"}
 
 
 @dataclass
@@ -193,6 +282,31 @@ class LocalFileService:
 
 
 @dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # In a real async environment we would use a proper async client,
+        # but the Protocol currently defines this as synchronous.
+        # For now, we'll wrap the sync request logic.
+        import asyncio
+
+        def _sync_call():
+            import urllib.request
+
+            url = f"{self.api_url.rstrip('/')}/internal/policy/evaluate"
+            headers = self._headers()
+            body = json.dumps(_serialize(mission_data)).encode("utf-8")
+            req = urllib.request.Request(url, data=body, headers=headers, method="POST")
+            with urllib.request.urlopen(req) as resp:
+                return json.loads(resp.read().decode("utf-8"))
+
+        res = _sync_call()
+        return PolicyDecision(
+            approval_required=res.get("approvalRequired", False),
+            risk=res.get("risk", "low"),
+        )
+
+
+@dataclass
 class StaticPolicyService:
     approval_required: bool = False
     default_risk: str = "low"
@@ -209,6 +323,31 @@ class StaticPolicyService:
                 break
         approval_required = self.approval_required or risk in {"high", "critical"}
         return PolicyDecision(approval_required=approval_required, risk=risk)
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        # Return metadata for logging; actual preparation happens in the backend.
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title},
+            "model": {
+                "provider": template.provider or "anthropic",
+                "model": template.model or "claude-3-5-sonnet-latest",
+            },
+        }
+
+    def execute_task(self, request: dict) -> dict[str, Any]:
+        # Implementation depends on specific runtime API
+        return {"status": "delegated", "request_id": request.get("id")}
 
 
 @dataclass
@@ -254,6 +393,60 @@ class DeterministicRuntimeService:
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # Deterministic logic for template spawning based on plan capabilities.
+        templates: list[SubAgentTemplate] = []
+        seen: set[str] = set()
+        role_map = {
+            "research": "researcher",
+            "browser": "browser",
+            "terminal": "coder",
+            "software-development": "coder",
+            "delivery": "writer",
+            "verification": "analyst",
+        }
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=role_map.get(step.capability, "generalist"),
+                    provider=None,  # Backend will choose default
+                    model=None,
+                    max_parallel_tasks=2 if step.capability in {"research", "browser"} else 1,
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        # Calls the Gateway API for sub-agent execution
+        res = await self._request("/api/runtime/execute", method="POST", data=params)
+
+        # Mapping Gateway response back to internal Python dataclasses
+        step_report = StepExecutionRecord(
+            step_id=params["step"].id,
+            started_at=res["run"]["startedAt"],
+            attempts=params.get("attempt", 1),
+            summary=res["stepReport"]["summary"],
+            diagnostics=StepExecutionDiagnostics(
+                overall_score=res["stepReport"]["diagnostics"]["overallScore"],
+                failure_class=res["stepReport"]["diagnostics"]["failureClass"],
+                retryable=res["stepReport"]["diagnostics"]["retryable"],
+            ),
+        )
+
+        return SubAgentExecutionResult(
+            step_report=step_report,
+            run=res["run"],
+            output=res["output"],
+            memory_text=res.get("memoryText", ""),
+        )
 
 
 @dataclass
