@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
+import urllib.error
+import urllib.request
+import asyncio
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -17,6 +21,7 @@ from .executor import (
     StepExecutionRecord,
     SubAgentExecutionResult,
     SubAgentTemplate,
+    utc_now_iso,
 )
 
 
@@ -31,6 +36,14 @@ def stable_hash(value: str) -> str:
 
 def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if hasattr(obj, "__dataclass_fields__"):
+        return asdict(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    return str(obj)
 
 
 @dataclass
@@ -51,6 +64,178 @@ class MemoryRecord:
 
 
 @dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        data: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            headers["x-jeanbot-auth-context"] = base64.b64encode(
+                json.dumps(auth_context).encode()
+            ).decode()
+
+        body = None
+        if data is not None:
+            body = json.dumps(data, default=asdict_fallback).encode()
+
+        req = urllib.request.Request(url, data=body, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status == 204:
+                    return None
+                return json.loads(response.read().decode())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()
+            raise RuntimeError(f"HTTP Error {e.code}: {error_body}") from e
+        except Exception as e:
+            raise RuntimeError(f"Request failed: {str(e)}") from e
+
+    async def _request_async(
+        self,
+        path: str,
+        method: str = "GET",
+        data: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        return await asyncio.to_thread(self._request, path, method, data, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": service,
+            "details": data,
+        }
+        try:
+            await self._request_async("/internal/audit", method="POST", data=payload)
+        except Exception:
+            # Fail silently for audit in this context if remote fails
+            pass
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "active"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        payload = {
+            "text": text,
+            "tags": tags,
+            "scope": "long-term" if memory_type == "long-term" else "short-term",
+            "importance": importance,
+        }
+        await self._request_async(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            data=payload,
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http"}
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return DeterministicRuntimeService().prepare_frame(
+            objective, step, plan, template, context
+        )
+
+    def execute_task(self, request: Any) -> Any:
+        return self._request("/internal/runtime/execute", method="POST", data=request)
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    failure_policy: dict[str, int] = field(default_factory=dict)
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        return DeterministicSubAgentService(
+            failure_policy=self.failure_policy
+        ).spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        auth_context = params.get("auth_context")
+        payload = {
+            "objective": params["objective"],
+            "step": params["step"],
+            "plan": params["plan"],
+            "template": params["template"],
+            "context": params["context"],
+            "providerMode": "live",
+        }
+
+        try:
+            response = await self._request_async(
+                "/api/runtime/execute",
+                method="POST",
+                data=payload,
+                auth_context=auth_context,
+            )
+        except Exception:
+            # Fallback to deterministic service
+            return await DeterministicSubAgentService(
+                failure_policy=self.failure_policy
+            ).run_step(params)
+
+        verification = response.get("verification", {})
+        passed = verification.get("passed", False)
+        diagnostics = StepExecutionDiagnostics(
+            overall_score=1.0 if passed else 0.4,
+            failure_class="none" if passed else "verification_failed",
+            retryable=not passed,
+        )
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=params["step"].id,
+                started_at=utc_now_iso(),
+                attempts=params.get("attempt", 1),
+                summary=response.get("finalText", "")[:200],
+                diagnostics=diagnostics,
+            ),
+            run={
+                "id": response.get("id", f"run-{params['step'].id}"),
+                "status": "completed",
+                "provider": response.get("provider"),
+                "model": response.get("model"),
+            },
+            output=response,
+            memory_text=response.get("finalText", ""),
+        )
+
+
+@dataclass
 class LocalAuditService:
     output_root: str
     records: list[AuditEventRecord] = field(default_factory=list)
@@ -59,7 +244,9 @@ class LocalAuditService:
         return ensure_directory(Path(self.output_root) / ".jeanbot" / "audit")
 
     async def record(self, event: str, entity_id: str, service: str, data: dict):
-        record = AuditEventRecord(event=event, entity_id=entity_id, service=service, data=data)
+        record = AuditEventRecord(
+            event=event, entity_id=entity_id, service=service, data=data
+        )
         self.records.append(record)
         file_name = f"{len(self.records):04d}-{stable_hash(event + entity_id)[:12]}.json"
         path = self._audit_dir() / file_name
@@ -68,7 +255,9 @@ class LocalAuditService:
     def list_events(self, event_prefix: str | None = None) -> list[AuditEventRecord]:
         if event_prefix is None:
             return list(self.records)
-        return [record for record in self.records if record.event.startswith(event_prefix)]
+        return [
+            record for record in self.records if record.event.startswith(event_prefix)
+        ]
 
     def summarize(self) -> dict[str, Any]:
         by_event: dict[str, int] = {}
@@ -128,7 +317,9 @@ class LocalMemoryService:
         return [record for _, record in scored[:limit]]
 
     def summarize(self, workspace_id: str) -> dict[str, Any]:
-        relevant = [record for record in self.records if record.workspace_id == workspace_id]
+        relevant = [
+            record for record in self.records if record.workspace_id == workspace_id
+        ]
         return {
             "workspace_id": workspace_id,
             "memory_count": len(relevant),
@@ -299,7 +490,9 @@ class DeterministicSubAgentService:
                     provider="ollama",
                     model="glm-5:cloud",
                     tool_ids=self.capability_tools.get(step.capability, ["read_file"]),
-                    max_parallel_tasks=2 if step.capability in {"research", "browser"} else 1,
+                    max_parallel_tasks=2
+                    if step.capability in {"research", "browser"}
+                    else 1,
                 )
             )
         return templates
