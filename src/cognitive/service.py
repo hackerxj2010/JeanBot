@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpMemoryService,
+    HttpRuntimeService,
+    HttpSubAgentService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -18,7 +23,10 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AuditService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -26,8 +34,10 @@ from .executor import (
     MissionRecord,
     MissionRunResult,
     MissionStep,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
 )
 
 
@@ -36,12 +46,12 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: Any
+    subagent_service: SubAgentService
+    policy_service: PolicyService
 
 
 @dataclass
@@ -53,14 +63,27 @@ class MissionExecutorService:
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+    service_mode: str = field(
+        default_factory=lambda: os.getenv("JEANBOT_SERVICE_MODE", "local")
+    )
+    api_url: str = field(
+        default_factory=lambda: os.getenv("JEANBOT_API_URL", "http://localhost:8080")
+    )
+    internal_token: str = field(
+        default_factory=lambda: os.getenv("INTERNAL_SERVICE_TOKEN", "default-token")
+    )
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
-        workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
+        workspace_id = mission_payload.get("workspace_id") or mission_payload.get(
+            "workspaceId"
+        )
         if not workspace_id:
             raise ValueError("mission payload requires workspace_id")
 
         objective = MissionObjective(
-            id=mission_payload.get("id") or mission_payload.get("mission_id") or self._mission_id(),
+            id=mission_payload.get("id")
+            or mission_payload.get("mission_id")
+            or self._mission_id(),
             title=mission_payload["title"],
             objective=mission_payload["objective"],
             workspace_id=workspace_id,
@@ -77,24 +100,53 @@ class MissionExecutorService:
         )
         context = ExecutionContext(
             workspace_root=self.workspace_root,
-            max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
+            max_parallelism=int(
+                mission_payload.get("max_parallelism", self.max_parallelism)
+            ),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
+
         file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
         policy_service = StaticPolicyService(
-            approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
+            approval_required=bool(
+                mission_payload.get("approval_required", self.approval_required)
+            ),
             default_risk=mission_payload.get("risk", "low"),
-            capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
+            capability_risk=dict(
+                self.capability_risk | mission_payload.get("capability_risk", {})
+            ),
         )
+
+        if self.service_mode == "http":
+            audit_service = HttpAuditService(
+                api_url=self.api_url, internal_token=self.internal_token
+            )
+            memory_service = HttpMemoryService(
+                api_url=self.api_url, internal_token=self.internal_token
+            )
+            runtime_service = HttpRuntimeService(
+                api_url=self.api_url, internal_token=self.internal_token
+            )
+            subagent_service = HttpSubAgentService(
+                api_url=self.api_url,
+                internal_token=self.internal_token,
+                failure_policy=dict(
+                    self.failure_policy | mission_payload.get("failure_policy", {})
+                ),
+            )
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(
+                    self.failure_policy | mission_payload.get("failure_policy", {})
+                )
+            )
+
         executor = MissionExecutor(
             runtime=runtime_service,
             memory_service=memory_service,
@@ -121,10 +173,14 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
-    async def finalize_distributed_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
+    async def finalize_distributed_payload(
+        self, mission_payload: dict[str, Any]
+    ) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
         bundle.record.active_execution = self._build_active_execution(mission_payload)
-        result = await bundle.executor.finalize_distributed_execution(bundle.record, bundle.context)
+        result = await bundle.executor.finalize_distributed_execution(
+            bundle.record, bundle.context
+        )
         self._persist_run_summary(bundle, result)
         return result
 
@@ -180,8 +236,12 @@ class MissionExecutorService:
             "plan_version": bundle.record.plan_version,
             "result": self._result_to_dict(result),
             "audit_summary": bundle.audit_service.summarize(),
-            "memory_summary": bundle.memory_service.summarize(bundle.record.objective.workspace_id),
-            "artifact_paths": bundle.file_service.artifact_paths(bundle.record.objective.id),
+            "memory_summary": bundle.memory_service.summarize(
+                bundle.record.objective.workspace_id
+            ),
+            "artifact_paths": bundle.file_service.artifact_paths(
+                bundle.record.objective.id
+            ),
         }
         (mission_dir / "mission-run.json").write_text(utc_json(summary), encoding="utf-8")
         (mission_dir / "mission-payload.json").write_text(
@@ -193,9 +253,13 @@ class MissionExecutorService:
         raw_steps = mission_payload.get("steps")
         if not raw_steps:
             raw_steps = self._default_steps_for_objective(mission_payload["objective"])
-        steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
+        steps = [
+            self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)
+        ]
         return MissionPlan(
-            version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
+            version=int(
+                mission_payload.get("plan_version", mission_payload.get("planVersion", 1))
+            ),
             steps=steps,
         )
 
@@ -237,7 +301,9 @@ class MissionExecutorService:
             },
         ]
 
-    def _build_active_execution(self, mission_payload: dict[str, Any]) -> ActiveExecutionState:
+    def _build_active_execution(
+        self, mission_payload: dict[str, Any]
+    ) -> ActiveExecutionState:
         active = mission_payload.get("active_execution", mission_payload.get("activeExecution"))
         if not active:
             raise ValueError("distributed payload requires active_execution")
