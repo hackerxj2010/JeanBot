@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -33,6 +37,67 @@ def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def asdict_fallback(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    return str(obj)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    service_token: str
+    service_name: str
+    auth_context_b64: str | None = None
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.service_token,
+        }
+        if self.auth_context_b64:
+            headers["x-jeanbot-internal-auth"] = self.auth_context_b64
+        return headers
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        data: Any = None,
+        timeout: int = 30,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}{path}"
+        body = (
+            json.dumps(data, default=asdict_fallback).encode("utf-8") if data is not None else None
+        )
+        req = urllib.request.Request(url, data=body, headers=self._headers(), method=method)
+
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as response:
+                if response.status == 204:
+                    return None
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            try:
+                error_body = json.loads(e.read().decode("utf-8"))
+                error_msg = error_body.get("error", str(e))
+            except Exception:
+                error_msg = str(e)
+            raise RuntimeError(f"HTTP {e.code} from {self.service_name} at {path}: {error_msg}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to call {self.service_name} at {path}: {str(e)}")
+
+    async def _request_async(
+        self,
+        method: str,
+        path: str,
+        data: Any = None,
+        timeout: int = 30,
+    ) -> Any:
+        return await asyncio.to_thread(self._request, method, path, data, timeout)
+
+
 @dataclass
 class AuditEventRecord:
     event: str
@@ -51,6 +116,24 @@ class MemoryRecord:
 
 
 @dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request_async(
+            "POST",
+            "/internal/audit",
+            {
+                "event": event,
+                "entityId": entity_id,
+                "service": service,
+                "data": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "summary": "Audit records persisted to remote service"}
+
+
+@dataclass
 class LocalAuditService:
     output_root: str
     records: list[AuditEventRecord] = field(default_factory=list)
@@ -58,7 +141,7 @@ class LocalAuditService:
     def _audit_dir(self) -> Path:
         return ensure_directory(Path(self.output_root) / ".jeanbot" / "audit")
 
-    async def record(self, event: str, entity_id: str, service: str, data: dict):
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None:
         record = AuditEventRecord(event=event, entity_id=entity_id, service=service, data=data)
         self.records.append(record)
         file_name = f"{len(self.records):04d}-{stable_hash(event + entity_id)[:12]}.json"
@@ -77,6 +160,35 @@ class LocalAuditService:
         return {
             "total_records": len(self.records),
             "events": by_event,
+        }
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request_async(
+            "POST",
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            {
+                "text": text,
+                "tags": tags,
+                "type": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {
+            "mode": "http",
+            "workspace_id": workspace_id,
+            "summary": "Memories persisted to remote service",
         }
 
 
@@ -193,6 +305,17 @@ class LocalFileService:
 
 
 @dataclass
+class HttpPolicyService(HttpServiceBase):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Policy is typically low-latency; use sync request
+        result = self._request("POST", "/internal/policy/evaluate", mission_data)
+        return PolicyDecision(
+            approval_required=result.get("approval_required", False),
+            risk=result.get("risk", "low"),
+        )
+
+
+@dataclass
 class StaticPolicyService:
     approval_required: bool = False
     default_risk: str = "low"
@@ -209,6 +332,32 @@ class StaticPolicyService:
                 break
         approval_required = self.approval_required or risk in {"high", "critical"}
         return PolicyDecision(approval_required=approval_required, risk=risk)
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return self._request(
+            "POST",
+            "/internal/runtime/prepare-frame",
+            {
+                "objective": objective,
+                "step": step,
+                "plan": plan,
+                "template": template,
+                "context": context,
+            },
+        )
+
+    def execute_task(self, request):
+        return self._request("POST", "/internal/runtime/execute", request)
 
 
 @dataclass
@@ -254,6 +403,29 @@ class DeterministicRuntimeService:
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        try:
+            # Try to fetch templates from remote gateway
+            # The Gateway routes /api/runtime/execute but internal may differ.
+            # Memory says it targets Gateway's /api/runtime/execute for sub-agents.
+            results = self._request("POST", "/api/runtime/execute", {"plan": plan, "action": "spawn"})
+            return [SubAgentTemplate(**item) for item in results]
+        except Exception:
+            # Fallback to deterministic as per memory
+            return DeterministicSubAgentService(failure_policy={}).spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        result = await self._request_async("POST", "/api/runtime/execute", params)
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(**result["step_report"]),
+            run=result["run"],
+            output=result["output"],
+            memory_text=result["memory_text"],
+        )
 
 
 @dataclass
