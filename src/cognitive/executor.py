@@ -179,7 +179,7 @@ class AgentRuntimeService(Protocol):
 
 
 class AuditService(Protocol):
-    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None: ...
 
 
 class MemoryService(Protocol):
@@ -1174,13 +1174,11 @@ class MissionExecutor:
                 },
             )
             
-            batch_results = await asyncio.gather(
-                *[
-                    self._execute_step(record, step, template_by_capability[step.capability], context)
-                    for step in batch
-                ],
-                return_exceptions=True,
-            )
+            tasks = [
+                self._execute_step(record, step, template_by_capability[step.capability], context)
+                for step in batch
+            ]
+            batch_results = await asyncio.gather(*tasks, return_exceptions=True)
             
             replan_applied = False
             unrecoverable_failure = None
