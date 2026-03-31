@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
 from .executor import (
+    ActiveExecutionState,
     ExecutionContext,
     MissionObjective,
     MissionPlan,
@@ -30,7 +35,154 @@ def stable_hash(value: str) -> str:
 
 
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    return str(obj)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    service_token: str
+    service_name: str = "python-cognitive-service"
+
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        auth_context: dict | None = None,
+    ) -> dict:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.service_token,
+        }
+        if auth_context:
+            headers["x-jeanbot-auth-context"] = base64.b64encode(
+                json.dumps(auth_context).encode("utf-8")
+            ).decode("utf-8")
+
+        data = json.dumps(body, default=asdict_fallback).encode("utf-8") if body else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8")
+            raise RuntimeError(f"HTTP {e.code} error from {url}: {error_body}") from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to {url}: {str(e)}") from e
+
+    async def _request_async(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        auth_context: dict | None = None,
+    ) -> dict:
+        return await asyncio.to_thread(self._request, path, method, body, auth_context)
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        payload = {
+            "text": text,
+            "tags": tags,
+            "memoryType": memory_type,
+            "importance": importance,
+        }
+        await self._request_async(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body=payload,
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"mode": "http", "workspace_id": workspace_id, "summarized": True}
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        return DeterministicSubAgentService(failure_policy={}).spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        objective: MissionObjective = params["objective"]
+        step: MissionStep = params["step"]
+        template: SubAgentTemplate = params["template"]
+        context: ExecutionContext = params["context"]
+
+        payload = {
+            "workspaceId": objective.workspace_id,
+            "title": step.title,
+            "objective": step.description,
+            "capability": step.capability,
+            "mode": "live",
+            "provider": template.provider,
+            "model": template.model,
+            "toolIds": template.tool_ids,
+            "context": f"Mission: {objective.title}. Objective: {objective.objective}",
+        }
+
+        response = await self._request_async(
+            "/api/runtime/execute",
+            method="POST",
+            body=payload,
+            auth_context=params.get("auth_context"),
+        )
+
+        output = response.get("output", {})
+        final_text = output.get("finalText", "")
+
+        # Qualitative verification via qualitative intelligence
+        memory_text = (
+            f"{step.title}: {final_text}. "
+            f"Tools={','.join(template.tool_ids or [])}. "
+            f"RunId={response.get('id', 'unknown')}"
+        )
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at="",
+                attempts=int(params.get("attempt", 1)),
+                summary=f"Completed {step.title} via HTTP runtime",
+                diagnostics=None,  # Will be assessed by intelligence
+            ),
+            run=response,
+            output=output,
+            memory_text=memory_text,
+        )
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "event": event,
+            "entityId": entity_id,
+            "service": service,
+            "data": data,
+        }
+        await self._request_async("/internal/audit", method="POST", body=payload)
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "summarized": True}
 
 
 @dataclass
