@@ -215,7 +215,7 @@ class PolicyService(Protocol):
     def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
 
 
-class SubAgentService(Protocol):
+class MissionSubAgentService(Protocol):
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
     async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
 
@@ -461,7 +461,7 @@ class MissionExecutor:
         runtime: AgentRuntimeService,
         memory_service: MemoryService,
         audit_service: AuditService,
-        sub_agent_service: SubAgentService,
+        sub_agent_service: MissionSubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
     ):
