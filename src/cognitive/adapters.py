@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -29,8 +33,107 @@ def stable_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def asdict_fallback(obj):
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
+
+
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+
+    def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "python-mission-runner",
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            encoded_context = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode(
+                "utf-8"
+            )
+            headers["x-jeanbot-internal-auth-context"] = encoded_context
+
+        data = json.dumps(body, default=asdict_fallback).encode("utf-8") if body else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode("utf-8")
+            try:
+                error_json = json.loads(error_body)
+                message = error_json.get("error", str(e))
+            except Exception:
+                message = error_body or str(e)
+            raise RuntimeError(f"HTTP {e.code} from {method} {url}: {message}")
+        except Exception as e:
+            raise RuntimeError(f"Request failed to {method} {url}: {str(e)}")
+
+    async def _request_async(
+        self,
+        path: str,
+        method: str = "GET",
+        body: Any = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        return await asyncio.to_thread(self._request, path, method, body, auth_context)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None:
+        payload = {
+            "event": event,
+            "entityId": entity_id,
+            "service": service,
+            "data": data,
+        }
+        await self._request_async("/internal/audit", method="POST", body=payload)
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "total_records": "remote"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ) -> None:
+        payload = {
+            "text": text,
+            "tags": list(tags),
+            "memoryType": memory_type,
+            "importance": importance,
+        }
+        await self._request_async(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body=payload,
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http", "memory_count": "remote"}
 
 
 @dataclass
@@ -58,7 +161,7 @@ class LocalAuditService:
     def _audit_dir(self) -> Path:
         return ensure_directory(Path(self.output_root) / ".jeanbot" / "audit")
 
-    async def record(self, event: str, entity_id: str, service: str, data: dict):
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None:
         record = AuditEventRecord(event=event, entity_id=entity_id, service=service, data=data)
         self.records.append(record)
         file_name = f"{len(self.records):04d}-{stable_hash(event + entity_id)[:12]}.json"
@@ -95,7 +198,7 @@ class LocalMemoryService:
         tags: list[str],
         memory_type: str,
         importance: float,
-    ):
+    ) -> None:
         record = MemoryRecord(
             workspace_id=workspace_id,
             text=text,
@@ -164,7 +267,7 @@ class LocalFileService:
         completed_steps: list[str],
         running_steps: list[str],
         pending_steps: list[str],
-    ):
+    ) -> None:
         payload = {
             "mission_title": mission_title,
             "completed_steps": completed_steps,
@@ -249,7 +352,7 @@ class DeterministicRuntimeService:
             },
         }
 
-    def execute_task(self, request):
+    def execute_task(self, request: Any) -> dict[str, Any]:
         return {
             "status": "synthetic",
             "request": request,
@@ -399,3 +502,57 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    failure_policy: dict[str, int] = field(default_factory=dict)
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        try:
+            raw_templates = self._request("/internal/runtime/execute", method="GET")
+            return [
+                SubAgentTemplate(
+                    specialization=t["specialization"],
+                    role=t["role"],
+                    provider=t.get("provider"),
+                    model=t.get("model"),
+                    tool_ids=t.get("toolIds"),
+                    max_parallel_tasks=t.get("maxParallelTasks", 1),
+                )
+                for t in raw_templates
+            ]
+        except Exception:
+            return DeterministicSubAgentService(failure_policy=self.failure_policy).spawn_for_plan(
+                plan
+            )
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        try:
+            raw_result = await self._request_async(
+                "/api/runtime/execute",
+                method="POST",
+                body=params,
+                auth_context=params.get("auth_context"),
+            )
+            report_data = raw_result["stepReport"]
+            return SubAgentExecutionResult(
+                step_report=StepExecutionRecord(
+                    step_id=report_data["stepId"],
+                    started_at=report_data["startedAt"],
+                    attempts=report_data.get("attempts", 1),
+                    summary=report_data.get("summary", ""),
+                    diagnostics=StepExecutionDiagnostics(
+                        **report_data.get("diagnostics", {})
+                    )
+                    if report_data.get("diagnostics")
+                    else None,
+                ),
+                run=raw_result["run"],
+                output=raw_result["output"],
+                memory_text=raw_result.get("memoryText", ""),
+            )
+        except Exception as e:
+            return await DeterministicSubAgentService(
+                failure_policy=self.failure_policy
+            ).run_step(params)
