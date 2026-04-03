@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,6 +10,10 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAgentRuntimeService,
+    HttpAuditService,
+    HttpMemoryService,
+    HttpSubAgentService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -18,7 +23,10 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AgentRuntimeService,
+    AuditService,
     ExecutionContext,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -28,6 +36,7 @@ from .executor import (
     MissionStep,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
 )
 
 
@@ -36,11 +45,11 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
+    audit_service: AuditService
+    memory_service: MemoryService
     file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
     policy_service: StaticPolicyService
 
 
@@ -58,6 +67,10 @@ class MissionExecutorService:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
         if not workspace_id:
             raise ValueError("mission payload requires workspace_id")
+
+        mode = os.environ.get("JEANBOT_SERVICE_MODE", "local")
+        api_url = os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
+        internal_token = os.environ.get("INTERNAL_SERVICE_TOKEN", "local-dev-token")
 
         objective = MissionObjective(
             id=mission_payload.get("id") or mission_payload.get("mission_id") or self._mission_id(),
@@ -80,16 +93,24 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
+
+        if mode == "http":
+            audit_service = HttpAuditService(api_url, internal_token)
+            memory_service = HttpMemoryService(api_url, internal_token)
+            runtime_service = HttpAgentRuntimeService(api_url, internal_token)
+            subagent_service = HttpSubAgentService(api_url, internal_token)
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
+            )
+
         file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
@@ -175,6 +196,7 @@ class MissionExecutorService:
         result: MissionRunResult,
     ) -> None:
         mission_dir = self._mission_dir(bundle.record.objective.id)
+
         summary = {
             "mission": asdict(bundle.record.objective),
             "plan_version": bundle.record.plan_version,
