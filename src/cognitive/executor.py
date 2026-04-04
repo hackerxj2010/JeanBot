@@ -174,12 +174,21 @@ class MissionRunResult:
 
 
 class AgentRuntimeService(Protocol):
-    def prepare_frame(self, objective, step, plan, template, context): ...
-    def execute_task(self, request): ...
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]: ...
+
+    def execute_task(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class AuditService(Protocol):
-    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+    async def record(self, event: str, entity_id: str, service: str, data: dict[str, Any]) -> None: ...
+    def summarize(self) -> dict[str, Any]: ...
 
 
 class MemoryService(Protocol):
@@ -190,7 +199,8 @@ class MemoryService(Protocol):
         tags: list[str],
         memory_type: str,
         importance: float,
-    ): ...
+    ) -> None: ...
+    def summarize(self, workspace_id: str) -> dict[str, Any]: ...
 
 
 class FileService(Protocol):
@@ -201,7 +211,8 @@ class FileService(Protocol):
         completed_steps: list[str],
         running_steps: list[str],
         pending_steps: list[str],
-    ): ...
+    ) -> None: ...
+
     async def write_artifact(
         self,
         workspace_root: str,
@@ -212,12 +223,12 @@ class FileService(Protocol):
 
 
 class PolicyService(Protocol):
-    def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
+    def evaluate_mission(self, mission_data: dict[str, Any]) -> PolicyDecision: ...
 
 
 class SubAgentService(Protocol):
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
-    async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
+    async def run_step(self, params: dict[str, Any]) -> SubAgentExecutionResult: ...
 
 
 class MissionExecutionIntelligence:
