@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.error
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -30,7 +34,65 @@ def stable_hash(value: str) -> str:
 
 
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(asdict_fallback(value), indent=2, sort_keys=True)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if hasattr(obj, "__dataclass_fields__"):
+        return asdict_fallback(asdict(obj))
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, list):
+        return [asdict_fallback(x) for x in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    return obj
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    service_name: str
+    auth_context: dict | None = None
+
+    def _headers(self) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if self.auth_context:
+            auth_str = json.dumps(asdict_fallback(self.auth_context))
+            headers["x-jeanbot-auth-context"] = base64.b64encode(auth_str.encode()).decode()
+        return headers
+
+    async def _request(self, path: str, method: str = "GET", data: Any = None) -> Any:
+        url = f"{self.api_url.rstrip('/')}{path}"
+        body = None
+        if data is not None:
+            body = json.dumps(asdict_fallback(data)).encode("utf-8")
+
+        req = urllib.request.Request(url, data=body, headers=self._headers(), method=method)
+
+        def _call():
+            with urllib.request.urlopen(req, timeout=30) as response:
+                if response.status == 204:
+                    return None
+                return json.loads(response.read().decode("utf-8"))
+
+        try:
+            return await asyncio.to_thread(_call)
+        except urllib.error.HTTPError as e:
+            try:
+                error_body = e.read().decode("utf-8")
+            except Exception:
+                error_body = str(e)
+            raise RuntimeError(
+                f"HTTP {e.code} from {self.service_name} at {path}: {error_body}"
+            ) from e
+        except Exception as e:
+            raise RuntimeError(f"Failed to connect to {self.service_name} at {path}: {str(e)}") from e
 
 
 @dataclass
@@ -48,6 +110,24 @@ class MemoryRecord:
     tags: list[str]
     memory_type: str
     importance: float
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http-audit"}
+
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request(
+            "/internal/audit",
+            method="POST",
+            data={
+                "event": event,
+                "entityId": entity_id,
+                "service": service,
+                "data": data,
+            },
+        )
 
 
 @dataclass
@@ -78,6 +158,31 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"mode": "http-memory", "workspace_id": workspace_id}
+
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            data={
+                "text": text,
+                "tags": tags,
+                "type": memory_type,
+                "importance": importance,
+            },
+        )
 
 
 @dataclass
@@ -212,6 +317,41 @@ class StaticPolicyService:
 
 
 @dataclass
+class HttpRuntimeService(HttpServiceBase):
+    provider: str = "anthropic"
+    model: str = "claude-3-5-sonnet-latest"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title, "capability": step.capability},
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+            "model": {
+                "provider": template.provider or self.provider,
+                "model": template.model or self.model,
+            },
+        }
+
+    async def execute_task(self, request: dict[str, Any]) -> Any:
+        return await self._request("/internal/runtime/execute", method="POST", data=request)
+
+
+@dataclass
 class DeterministicRuntimeService:
     provider: str = "ollama"
     model: str = "glm-5:cloud"
@@ -254,6 +394,34 @@ class DeterministicRuntimeService:
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    failure_policy: dict[str, int] = field(default_factory=dict)
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # Delegate template creation to the same deterministic logic for now
+        # but could fetch from remote service if needed.
+        return DeterministicSubAgentService(failure_policy=self.failure_policy).spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        # Note: In a real distributed environment, this might hit a gateway
+        # rather than an internal service directly depending on topology.
+        # Here we target the gateway runtime endpoint.
+        res = await self._request("/api/runtime/execute", method="POST", data=params)
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=params["step"].id,
+                started_at=res.get("startedAt", ""),
+                attempts=int(res.get("attempts", 1)),
+                summary=res.get("summary", ""),
+                diagnostics=StepExecutionDiagnostics(**res.get("diagnostics", {})),
+            ),
+            run=res.get("run", {}),
+            output=res.get("output", {}),
+            memory_text=res.get("memoryText", ""),
+        )
 
 
 @dataclass
