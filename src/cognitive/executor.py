@@ -179,10 +179,12 @@ class AgentRuntimeService(Protocol):
 
 
 class AuditService(Protocol):
+    def summarize(self) -> dict[str, Any]: ...
     async def record(self, event: str, entity_id: str, service: str, data: dict): ...
 
 
 class MemoryService(Protocol):
+    def summarize(self, workspace_id: str) -> dict[str, Any]: ...
     async def remember(
         self,
         workspace_id: str,
