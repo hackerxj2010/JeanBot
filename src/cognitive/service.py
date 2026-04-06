@@ -6,9 +6,14 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import os
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpMemoryService,
+    HttpRuntimeService,
+    HttpSubAgentService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -18,7 +23,10 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AgentRuntimeService,
+    AuditService,
     ExecutionContext,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -28,6 +36,7 @@ from .executor import (
     MissionStep,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
 )
 
 
@@ -36,11 +45,11 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
+    audit_service: AuditService
+    memory_service: MemoryService
     file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
     policy_service: StaticPolicyService
 
 
@@ -53,6 +62,9 @@ class MissionExecutorService:
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+    service_mode: str = field(default_factory=lambda: os.getenv("JEANBOT_SERVICE_MODE", "local"))
+    api_url: str = field(default_factory=lambda: os.getenv("JEANBOT_API_URL", "http://localhost:8080"))
+    internal_token: str = field(default_factory=lambda: os.getenv("INTERNAL_SERVICE_TOKEN", "local-token"))
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -80,16 +92,23 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
         file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
+
+        if self.service_mode == "http":
+            audit_service: AuditService = HttpAuditService(self.api_url, self.internal_token)
+            memory_service: MemoryService = HttpMemoryService(self.api_url, self.internal_token)
+            runtime_service: AgentRuntimeService = HttpRuntimeService(self.api_url, self.internal_token)
+            subagent_service: SubAgentService = HttpSubAgentService(self.api_url, self.internal_token)
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
+            )
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
