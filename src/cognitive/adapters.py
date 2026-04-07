@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, is_dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from .executor import (
     ExecutionContext,
@@ -17,6 +21,7 @@ from .executor import (
     StepExecutionRecord,
     SubAgentExecutionResult,
     SubAgentTemplate,
+    utc_now_iso,
 )
 
 
@@ -29,8 +34,16 @@ def stable_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def asdict_fallback(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if is_dataclass(obj):
+        return asdict(obj)
+    return str(obj)
+
+
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
 
 
 @dataclass
@@ -399,3 +412,176 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    auth_context: dict | None = None
+
+    def _headers(self, service_name: str) -> dict[str, str]:
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if self.auth_context:
+            context_json = json.dumps(self.auth_context)
+            headers["x-jeanbot-auth-context"] = base64.b64encode(context_json.encode()).decode()
+        return headers
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        service_name: str,
+        body: dict | None = None,
+    ) -> dict[str, Any]:
+        url = f"{self.api_url.rstrip('/')}{path}"
+        data = utc_json(body).encode() if body else None
+        req = urllib.request.Request(url, data=data, headers=self._headers(service_name), method=method)
+
+        def _do_request():
+            with urllib.request.urlopen(req, timeout=30) as response:
+                return json.loads(response.read().decode())
+
+        try:
+            return await asyncio.to_thread(_do_request)
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()
+            try:
+                error_json = json.loads(error_body)
+                raise RuntimeError(f"HTTP Error {e.code}: {error_json.get('error', error_body)}")
+            except json.JSONDecodeError:
+                raise RuntimeError(f"HTTP Error {e.code}: {error_body}")
+        except Exception as e:
+            raise RuntimeError(f"Failed to execute {method} {path}: {str(e)}")
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request(
+            "POST",
+            "/internal/audit",
+            "agent-orchestrator",
+            {"event": event, "entity_id": entity_id, "service": service, "data": data},
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http-persistence"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            "POST",
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            "agent-orchestrator",
+            {
+                "text": text,
+                "tags": tags,
+                "memory_type": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http-persistence"}
+
+
+@dataclass
+class HttpAgentRuntimeService(HttpServiceBase):
+    provider: str = "anthropic"
+    model: str = "claude-3-5-sonnet-latest"
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {
+                "id": step.id,
+                "title": step.title,
+                "capability": step.capability,
+            },
+            "template": {
+                "role": template.role,
+                "provider": template.provider or self.provider,
+                "model": template.model or self.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+        }
+
+    async def execute_task(self, request_payload: dict[str, Any]) -> dict[str, Any]:
+        return await self._request(
+            "POST",
+            "/internal/runtime/execute",
+            "agent-orchestrator",
+            request_payload,
+        )
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    failure_policy: dict[str, int] = field(default_factory=dict)
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # In HTTP mode, we rely on the backend to provide templates or use standard mappings
+        # For now, we reuse the logic from DeterministicSubAgentService but without synthetic constraints
+        mock_service = DeterministicSubAgentService()
+        return mock_service.spawn_for_plan(plan)
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        step: MissionStep = params["step"]
+        template: SubAgentTemplate = params["template"]
+        objective: MissionObjective = params["objective"]
+        context: ExecutionContext = params["context"]
+
+        # We call the Gateway's execution endpoint which orchestrates the runtime
+        response = await self._request(
+            "POST",
+            "/api/runtime/execute",
+            "agent-orchestrator",
+            {
+                "workspaceId": objective.workspace_id,
+                "title": step.title,
+                "objective": step.description,
+                "capability": step.capability,
+                "provider": template.provider,
+                "model": template.model,
+                "mode": "live",
+                "failure_policy": self.failure_policy.get(step.id, 0),
+            },
+        )
+
+        # Map backend response to Python execution result
+        # The backend /api/runtime/execute returns a structured result
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at=utc_now_iso(),
+                attempts=int(response.get("attempts", 1)),
+                summary=response.get("summary", ""),
+            ),
+            run=response.get("run", {}),
+            output=response.get("output", {}),
+            memory_text=response.get("memory_text", response.get("summary", "")),
+        )
