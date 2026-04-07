@@ -180,6 +180,7 @@ class AgentRuntimeService(Protocol):
 
 class AuditService(Protocol):
     async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+    def summarize(self) -> dict[str, Any]: ...
 
 
 class MemoryService(Protocol):
@@ -191,6 +192,7 @@ class MemoryService(Protocol):
         memory_type: str,
         importance: float,
     ): ...
+    def summarize(self, workspace_id: str) -> dict[str, Any]: ...
 
 
 class FileService(Protocol):

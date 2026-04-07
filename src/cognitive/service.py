@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,6 +10,10 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAgentRuntimeService,
+    HttpAuditService,
+    HttpMemoryService,
+    HttpSubAgentService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -36,12 +41,12 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
+    policy_service: PolicyService
 
 
 @dataclass
@@ -53,6 +58,14 @@ class MissionExecutorService:
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+    service_mode: str = "local"
+    api_url: str = "http://localhost:8080"
+    internal_token: str = ""
+
+    def __post_init__(self):
+        self.service_mode = os.environ.get("JEANBOT_SERVICE_MODE", self.service_mode)
+        self.api_url = os.environ.get("JEANBOT_API_URL", self.api_url)
+        self.internal_token = os.environ.get("INTERNAL_SERVICE_TOKEN", self.internal_token)
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -80,21 +93,49 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
+
         file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
             capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
         )
+
+        if self.service_mode == "http":
+            audit_service = HttpAuditService(
+                api_url=self.api_url,
+                internal_token=self.internal_token,
+                auth_context=context.auth_context,
+            )
+            memory_service = HttpMemoryService(
+                api_url=self.api_url,
+                internal_token=self.internal_token,
+                auth_context=context.auth_context,
+            )
+            runtime_service = HttpAgentRuntimeService(
+                api_url=self.api_url,
+                internal_token=self.internal_token,
+                auth_context=context.auth_context,
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = HttpSubAgentService(
+                api_url=self.api_url,
+                internal_token=self.internal_token,
+                auth_context=context.auth_context,
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {})),
+            )
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
+            )
+
         executor = MissionExecutor(
             runtime=runtime_service,
             memory_service=memory_service,
