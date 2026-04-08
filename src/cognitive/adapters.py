@@ -8,7 +8,10 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
+try:
+    import httpx
+except ModuleNotFoundError:  # pragma: no cover - handled at runtime when live mode is used
+    httpx = None
 
 from .executor import (
     ActiveExecutionState,
@@ -263,6 +266,10 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
+        if httpx is None:
+            raise RuntimeError(
+                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
+            )
         url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
         headers = {
             "x-jeanbot-internal-service": "agent-orchestrator",
