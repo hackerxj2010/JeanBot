@@ -3390,13 +3390,175 @@ export const createPersistenceBundle = (): PersistenceBundle => {
     mode: "postgres",
     identity: new PrismaIdentityRepository(prismaRuntime),
     missions: new PrismaMissionRepository(prismaRuntime),
-    memory: new PostgresMemoryRepository(runtime),
+    memory: new PrismaMemoryRepository(prismaRuntime),
     audit: new PrismaAuditRepository(prismaRuntime),
     heartbeats: new PrismaHeartbeatRepository(prismaRuntime),
     heartbeatExecutions: new PrismaHeartbeatExecutionRepository(prismaRuntime),
-    knowledge: new PostgresKnowledgeRepository(runtime),
+    knowledge: new PrismaKnowledgeRepository(prismaRuntime),
     billing: new PrismaBillingRepository(prismaRuntime),
     integrations: new PrismaIntegrationRepository(prismaRuntime),
     notifications: new PrismaNotificationRepository(prismaRuntime)
   };
 };
+
+export class PrismaMemoryRepository implements MemoryRepository {
+  constructor(private readonly runtime: PrismaRuntime) {}
+
+  async save(workspaceId: string, records: MemoryRecord[]) {
+    await this.runtime.client.$transaction(
+      records.map((record) =>
+        this.runtime.client.memoryRecord.upsert({
+          where: { id: record.id },
+          update: {
+            text: record.text,
+            tags: record.tags,
+            importance: record.importance,
+            contentHash: record.contentHash,
+            createdAt: new Date(record.createdAt)
+          },
+          create: {
+            id: record.id,
+            workspaceId: record.workspaceId,
+            scope: record.scope,
+            text: record.text,
+            tags: record.tags,
+            importance: record.importance,
+            contentHash: record.contentHash,
+            createdAt: new Date(record.createdAt)
+          }
+        })
+      )
+    );
+  }
+
+  async list(workspaceId: string) {
+    const rows = await this.runtime.client.memoryRecord.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: "desc" }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      scope: row.scope,
+      text: row.text,
+      tags: row.tags as string[],
+      importance: row.importance ?? undefined,
+      contentHash: row.contentHash,
+      createdAt: row.createdAt.toISOString()
+    }));
+  }
+
+  async search(workspaceId: string, embedding: number[], limit = 10) {
+    // Vector search still requires raw SQL for now due to Prisma limitations with pgvector
+    const vectorStr = `[${embedding.join(",")}]`;
+    const rows = await this.runtime.client.$queryRawUnsafe(
+      `SELECT id, workspace_id as "workspaceId", scope, text, tags, importance, content_hash as "contentHash", created_at as "createdAt",
+       (embedding <=> $1::vector) as similarity
+       FROM memory_records
+       WHERE workspace_id = $2
+       ORDER BY similarity ASC
+       LIMIT $3`,
+      vectorStr,
+      workspaceId,
+      limit
+    );
+
+    return (rows as any[]).map((row) => ({
+      record: {
+        id: row.id,
+        workspaceId: row.workspaceId,
+        scope: row.scope,
+        text: row.text,
+        tags: row.tags,
+        importance: row.importance ?? undefined,
+        contentHash: row.contentHash,
+        createdAt: row.createdAt.toISOString()
+      },
+      similarity: 1 - row.similarity
+    }));
+  }
+}
+
+export class PrismaKnowledgeRepository implements KnowledgeRepository {
+  constructor(private readonly runtime: PrismaRuntime) {}
+
+  async save(record: KnowledgeDocumentRecord) {
+    const row = await this.runtime.client.knowledgeDocument.upsert({
+      where: { id: record.id },
+      update: {
+        title: record.title,
+        body: record.body,
+        metadata: record.metadata,
+        contentHash: record.contentHash,
+        excerpt: record.excerpt,
+        createdAt: new Date(record.createdAt)
+      },
+      create: {
+        id: record.id,
+        workspaceId: record.workspaceId,
+        title: record.title,
+        body: record.body,
+        metadata: record.metadata,
+        contentHash: record.contentHash,
+        excerpt: record.excerpt,
+        createdAt: new Date(record.createdAt)
+      }
+    });
+    return {
+      id: row.id,
+      workspaceId: row.workspaceId,
+      title: row.title,
+      body: row.body,
+      metadata: row.metadata as Record<string, any>,
+      contentHash: row.contentHash,
+      excerpt: row.excerpt,
+      createdAt: row.createdAt.toISOString()
+    };
+  }
+
+  async list(workspaceId: string) {
+    const rows = await this.runtime.client.knowledgeDocument.findMany({
+      where: { workspaceId },
+      orderBy: { createdAt: "desc" }
+    });
+    return rows.map((row: any) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      title: row.title,
+      body: row.body,
+      metadata: row.metadata as Record<string, any>,
+      contentHash: row.contentHash,
+      excerpt: row.excerpt,
+      createdAt: row.createdAt.toISOString()
+    }));
+  }
+
+  async search(workspaceId: string, embedding: number[], limit = 10) {
+    const vectorStr = `[${embedding.join(",")}]`;
+    const rows = await this.runtime.client.$queryRawUnsafe(
+      `SELECT id, workspace_id as "workspaceId", title, body, metadata, content_hash as "contentHash", excerpt, created_at as "createdAt",
+       (embedding <=> $1::vector) as similarity
+       FROM knowledge_documents
+       WHERE workspace_id = $2
+       ORDER BY similarity ASC
+       LIMIT $3`,
+      vectorStr,
+      workspaceId,
+      limit
+    );
+
+    return (rows as any[]).map((row) => ({
+      document: {
+        id: row.id,
+        workspaceId: row.workspaceId,
+        title: row.title,
+        body: row.body,
+        metadata: row.metadata as Record<string, any>,
+        contentHash: row.contentHash,
+        excerpt: row.excerpt,
+        createdAt: row.createdAt.toISOString()
+      },
+      similarity: 1 - row.similarity
+    }));
+  }
+}

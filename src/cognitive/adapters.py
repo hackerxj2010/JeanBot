@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.request
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +18,7 @@ from .executor import (
     MissionStep,
     PolicyDecision,
     StepExecutionDiagnostics,
+    MemoryRecord,
     StepExecutionRecord,
     SubAgentExecutionResult,
     SubAgentTemplate,
@@ -33,21 +38,20 @@ def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def asdict_fallback(obj):
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    return str(obj)
+
+
 @dataclass
 class AuditEventRecord:
     event: str
     entity_id: str
     service: str
     data: dict[str, Any]
-
-
-@dataclass
-class MemoryRecord:
-    workspace_id: str
-    text: str
-    tags: list[str]
-    memory_type: str
-    importance: float
 
 
 @dataclass
@@ -99,7 +103,7 @@ class LocalMemoryService:
         record = MemoryRecord(
             workspace_id=workspace_id,
             text=text,
-            tags=list(tags),
+            tags=tags,
             memory_type=memory_type,
             importance=importance,
         )
@@ -108,27 +112,8 @@ class LocalMemoryService:
         path = self._memory_dir() / file_name
         path.write_text(utc_json(asdict(record)), encoding="utf-8")
 
-    def search(
-        self,
-        workspace_id: str,
-        query: str,
-        limit: int = 5,
-    ) -> list[MemoryRecord]:
-        query_terms = {term.lower() for term in query.split() if term.strip()}
-        scored: list[tuple[float, MemoryRecord]] = []
-        for record in self.records:
-            if record.workspace_id != workspace_id:
-                continue
-            haystack = f"{record.text} {' '.join(record.tags)}".lower()
-            matches = sum(1 for term in query_terms if term in haystack)
-            score = matches + record.importance
-            if score > 0:
-                scored.append((score, record))
-        scored.sort(key=lambda item: item[0], reverse=True)
-        return [record for _, record in scored[:limit]]
-
     def summarize(self, workspace_id: str) -> dict[str, Any]:
-        relevant = [record for record in self.records if record.workspace_id == workspace_id]
+        relevant = [r for r in self.records if r.workspace_id == workspace_id]
         return {
             "workspace_id": workspace_id,
             "memory_count": len(relevant),
@@ -399,3 +384,138 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+class HttpServiceBase:
+    def __init__(self, api_url: str, token: str):
+        self.api_url = api_url.rstrip("/")
+        self.token = token
+
+    async def _request(
+        self,
+        method: str,
+        path: str,
+        data: dict | None = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url}{path}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+        }
+        if auth_context:
+            headers["x-jeanbot-auth-context"] = base64.b64encode(
+                json.dumps(auth_context).encode("utf-8")
+            ).decode("utf-8")
+
+        body = json.dumps(data, default=asdict_fallback).encode("utf-8") if data else None
+
+        def do_request():
+            req = urllib.request.Request(url, data=body, headers=headers, method=method)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as response:
+                    return json.loads(response.read().decode("utf-8"))
+            except urllib.error.HTTPError as e:
+                error_body = e.read().decode("utf-8")
+                raise RuntimeError(f"HTTP {e.code}: {error_body}") from e
+            except Exception as e:
+                raise RuntimeError(f"Request failed: {str(e)}") from e
+
+        return await asyncio.to_thread(do_request)
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    def __init__(self, api_url: str, token: str):
+        super().__init__(api_url, token)
+
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "event": event,
+            "entityId": entity_id,
+            "service": service,
+            "data": data,
+        }
+        await self._request("POST", "/internal/audit", data=payload)
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "streaming"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    def __init__(self, api_url: str, token: str):
+        super().__init__(api_url, token)
+
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        payload = {
+            "text": text,
+            "tags": tags,
+            "memoryType": memory_type,
+            "importance": importance,
+        }
+        await self._request(
+            "POST",
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            data=payload,
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http"}
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def __init__(self, api_url: str, token: str):
+        super().__init__(api_url, token)
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "missionId": objective.id,
+            "stepId": step.id,
+            "workspaceId": objective.workspace_id,
+            "capability": step.capability,
+        }
+
+    async def execute_task(self, request: dict[str, Any]):
+        return await self._request("POST", "/internal/runtime/execute", data=request)
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    def __init__(self, api_url: str, token: str):
+        super().__init__(api_url, token)
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        # Remote spawning is handled by the orchestrator service
+        return []
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        result = await self._request("POST", "/api/runtime/execute", data=params)
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=params["step"].id,
+                started_at="",
+                attempts=int(params.get("attempt", 1)),
+                summary=result.get("summary", ""),
+                diagnostics=StepExecutionDiagnostics(**result.get("diagnostics", {})),
+            ),
+            run=result.get("run", {}),
+            output=result.get("output", {}),
+            memory_text=result.get("memoryText", ""),
+        )

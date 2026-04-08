@@ -182,6 +182,15 @@ class AuditService(Protocol):
     async def record(self, event: str, entity_id: str, service: str, data: dict): ...
 
 
+@dataclass
+class MemoryRecord:
+    workspace_id: str
+    text: str
+    tags: list[str]
+    memory_type: str
+    importance: float
+
+
 class MemoryService(Protocol):
     async def remember(
         self,
