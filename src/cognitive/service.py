@@ -9,6 +9,8 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpRuntimeService,
+    HttpSubAgentService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -53,6 +55,7 @@ class MissionExecutorService:
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+    mode: str = "local"
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -83,13 +86,20 @@ class MissionExecutorService:
         audit_service = LocalAuditService(output_root=self.workspace_root)
         memory_service = LocalMemoryService(output_root=self.workspace_root)
         file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
+
+        execution_mode = mission_payload.get("mode", self.mode)
+
+        if execution_mode == "live":
+            runtime_service = HttpRuntimeService()
+            subagent_service = HttpSubAgentService(runtime=runtime_service)
+        else:
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
+            )
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),

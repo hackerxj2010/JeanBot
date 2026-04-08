@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import random
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 from .executor import (
+    ActiveExecutionState,
     ExecutionContext,
     MissionObjective,
     MissionPlan,
@@ -17,6 +21,7 @@ from .executor import (
     StepExecutionRecord,
     SubAgentExecutionResult,
     SubAgentTemplate,
+    utc_now_iso,
 )
 
 
@@ -157,6 +162,9 @@ class LocalFileService:
     def _artifact_dir(self, mission_id: str) -> Path:
         return ensure_directory(self._jeanbot_dir() / "artifacts" / mission_id)
 
+    def _state_dir(self) -> Path:
+        return ensure_directory(self._jeanbot_dir() / "state")
+
     async def update_workspace_context(
         self,
         workspace_root: str,
@@ -191,6 +199,16 @@ class LocalFileService:
         artifact_dir = self._artifact_dir(mission_id)
         return sorted(str(path) for path in artifact_dir.glob("*"))
 
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        path = self._state_dir() / f"mission-{mission_id}.json"
+        path.write_text(utc_json(state), encoding="utf-8")
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._state_dir() / f"mission-{mission_id}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
 
 @dataclass
 class StaticPolicyService:
@@ -209,6 +227,52 @@ class StaticPolicyService:
                 break
         approval_required = self.approval_required or risk in {"high", "critical"}
         return PolicyDecision(approval_required=approval_required, risk=risk)
+
+
+@dataclass
+class HttpRuntimeService:
+    base_url: str = field(
+        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
+    )
+    token: str = field(
+        default_factory=lambda: os.environ.get(
+            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
+        )
+    )
+
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "model": {
+                "provider": template.provider or "anthropic",
+                "model": template.model or "claude-sonnet-4-6",
+                "reason": "Python adapter frame preparation.",
+            },
+            "workspaceContext": "Python local workspace frame.",
+            "memorySummary": "Python local memory summary.",
+            "availableTools": template.tool_ids or [],
+            "policyPosture": "Python static policy posture.",
+            "systemPrompt": "Python-initiated live execution.",
+            "specialistPrompt": template.instructions or "Execute the mission step.",
+        }
+
+    async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
+        url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
+        headers = {
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(url, headers=headers, json=request)
+            response.raise_for_status()
+            return response.json()
 
 
 @dataclass
@@ -249,11 +313,142 @@ class DeterministicRuntimeService:
             },
         }
 
-    def execute_task(self, request):
+    async def execute_task(self, request):
         return {
             "status": "synthetic",
             "request": request,
         }
+
+
+@dataclass
+class HttpSubAgentService:
+    runtime: HttpRuntimeService
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        templates: list[SubAgentTemplate] = []
+        seen: set[str] = set()
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=step.assignee or f"{step.capability}-operator",
+                    provider="anthropic",
+                    model="claude-sonnet-4-6",
+                    tool_ids=None,
+                    max_parallel_tasks=1,
+                    instructions=f"Complete step '{step.title}': {step.description}",
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        mission_id: str = params["mission_id"]
+        objective: MissionObjective = params["objective"]
+        plan: MissionPlan = params["plan"]
+        step: MissionStep = params["step"]
+        template: SubAgentTemplate = params["template"]
+        context: ExecutionContext = params["context"]
+        attempt: int = params.get("attempt", 1)
+
+        request = {
+            "objective": {
+                "id": objective.id,
+                "workspaceId": objective.workspace_id,
+                "userId": "python-executor",
+                "title": objective.title,
+                "objective": objective.objective,
+                "context": f"Python execution context for {objective.title}",
+                "constraints": [],
+                "requiredCapabilities": [step.capability],
+                "risk": objective.risk,
+                "createdAt": utc_now_iso(),
+            },
+            "step": {
+                "id": step.id,
+                "title": step.title,
+                "description": step.description,
+                "capability": step.capability,
+                "stage": step.stage,
+                "dependsOn": step.depends_on,
+                "verification": f"Step {step.id} completed successfully.",
+                "assignee": template.role,
+                "status": "ready",
+            },
+            "plan": {
+                "id": f"plan-{mission_id}",
+                "missionId": mission_id,
+                "version": plan.version,
+                "summary": f"Python-initiated plan for {objective.title}",
+                "steps": [],  # Minimal plan for individual step execution
+                "generatedAt": utc_now_iso(),
+            },
+            "template": {
+                "id": f"template-{step.capability}",
+                "role": template.role,
+                "specialization": step.capability,
+                "instructions": template.instructions or step.description,
+                "maxParallelTasks": template.max_parallel_tasks,
+                "provider": template.provider,
+                "model": template.model,
+                "toolIds": template.tool_ids,
+            },
+            "context": {
+                "sessionId": f"session-{mission_id}",
+                "workspaceRoot": context.workspace_root,
+                "jeanFilePath": f"{context.workspace_root}/JEAN.md",
+                "planMode": False,
+                "maxParallelism": context.max_parallelism,
+            },
+            "providerMode": "live",
+        }
+
+        raw_result = await self.runtime.execute_task(request)
+
+        # Map the live RuntimeExecutionResult to the SubAgentExecutionResult format
+        # expected by the Python executor.
+        final_text = raw_result.get("finalText", "")
+        tool_calls = raw_result.get("toolCalls", [])
+        verification = raw_result.get("verification", {"ok": True, "reason": "Completed by runtime."})
+
+        diagnostics = StepExecutionDiagnostics(
+            overall_score=0.9 if verification.get("ok") else 0.4,
+            evidence_score=0.9 if final_text else 0.1,
+            coverage_score=1.0 if tool_calls else 0.5,
+            verification_score=1.0 if verification.get("ok") else 0.2,
+            failure_class="none" if verification.get("ok") else "runtime",
+            retryable=not verification.get("ok"),
+        )
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at=utc_now_iso(),
+                attempts=attempt,
+                summary=final_text[:200],
+                diagnostics=diagnostics,
+            ),
+            run={
+                "id": f"run-{step.id}-{attempt}",
+                "capability": step.capability,
+                "templateRole": template.role,
+                "status": "completed" if verification.get("ok") else "failed",
+                "provider": raw_result.get("provider", template.provider),
+                "model": raw_result.get("model", template.model),
+            },
+            output={
+                "finalText": final_text,
+                "verification": {
+                    "passed": verification.get("ok"),
+                    "reason": verification.get("reason"),
+                },
+                "toolCalls": tool_calls,
+                "providerResponses": raw_result.get("providerResponses", []),
+            },
+            memory_text=f"{step.title}: {final_text[:180]}",
+        )
 
 
 @dataclass
@@ -341,10 +536,20 @@ class DeterministicSubAgentService:
             f"Verification={verification['reason']}"
         )
 
+        runtime_request = {
+            "objective": params["objective"],
+            "step": step,
+            "plan": params["plan"],
+            "template": template,
+            "context": params["context"],
+            "providerMode": "synthetic",
+        }
+        await params["runtime"].execute_task(runtime_request)
+
         return SubAgentExecutionResult(
             step_report=StepExecutionRecord(
                 step_id=step.id,
-                started_at="",
+                started_at=utc_now_iso(),
                 attempts=attempt,
                 summary=summary,
                 diagnostics=diagnostics,
