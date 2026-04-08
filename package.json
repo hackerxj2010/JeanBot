@@ -12,7 +12,7 @@
     "dev": "pnpm --filter @jeanbot/api-gateway dev",
     "start": "pnpm --filter @jeanbot/api-gateway start",
     "build": "turbo run build",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "pnpm db:generate && tsc -p tsconfig.json --noEmit",
     "lint": "biome lint . && pnpm typecheck",
     "format": "biome format --write .",
     "test": "vitest run",
