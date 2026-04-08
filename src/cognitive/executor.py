@@ -4,7 +4,7 @@ import asyncio
 import json
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any, Awaitable, Protocol
 
 
@@ -13,7 +13,7 @@ def sleep_ms(ms: int) -> Awaitable[None]:
 
 
 def utc_now_iso() -> str:
-    return datetime.now(UTC).isoformat()
+    return datetime.now(timezone.utc).isoformat()
 
 
 def summarize_text(value: str, max_length: int = 220) -> str:
@@ -135,6 +135,7 @@ class SubAgentTemplate:
     provider: str | None = None
     model: str | None = None
     tool_ids: list[str] | None = None
+    instructions: str | None = None
     max_parallel_tasks: int = 1
 
 
