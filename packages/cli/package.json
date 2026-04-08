@@ -1,0 +1,19 @@
+{
+  "name": "@jeanbot/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "jean": "./dist/index.js"
+  },
+  "dependencies": {
+    "@jeanbot/core": "workspace:*",
+    "@jeanbot/logger": "workspace:*",
+    "yargs": "^17.7.2",
+    "chalk": "^5.3.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "@types/yargs": "^17.0.32"
+  }
+}
