@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.error
+import urllib.parse
+import urllib.request
+import asyncio
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +35,15 @@ def stable_hash(value: str) -> str:
 
 
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    raise TypeError(f"Object of type {obj.__class__.__name__} is not JSON serializable")
 
 
 @dataclass
@@ -399,3 +412,193 @@ class DeterministicSubAgentService:
         attempt_penalty = max(0.0, (attempt - 1) * 0.05)
         score = base + capability_weight - attempt_penalty
         return round(min(1.0, max(0.45, score)), 2)
+
+
+@dataclass
+class HttpServiceBase:
+    api_url: str
+    internal_token: str
+    service_name: str
+
+    async def _request(
+        self,
+        path: str,
+        method: str = "GET",
+        body: dict | None = None,
+        auth_context: dict | None = None,
+    ) -> Any:
+        url = f"{self.api_url.rstrip('/')}/{path.lstrip('/')}"
+        headers = {
+            "Content-Type": "application/json",
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+        }
+        if auth_context:
+            auth_str = json.dumps(auth_context)
+            headers["x-jeanbot-auth-context"] = base64.b64encode(auth_str.encode()).decode()
+
+        data = json.dumps(body, default=asdict_fallback).encode() if body else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+
+        try:
+            response = await asyncio.to_thread(urllib.request.urlopen, req, timeout=30)
+            return json.loads(response.read().decode())
+        except urllib.error.HTTPError as e:
+            error_body = e.read().decode()
+            raise RuntimeError(f"HTTP {e.code} for {url}: {error_body}")
+        except Exception as e:
+            raise RuntimeError(f"Request failed for {url}: {str(e)}")
+
+
+@dataclass
+class HttpAuditService(HttpServiceBase):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._request(
+            "/internal/audit",
+            method="POST",
+            body={
+                "event": event,
+                "entityId": entity_id,
+                "service": service,
+                "data": data,
+            },
+        )
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http"}
+
+
+@dataclass
+class HttpMemoryService(HttpServiceBase):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._request(
+            f"/internal/memory/workspaces/{workspace_id}/remember",
+            method="POST",
+            body={
+                "text": text,
+                "tags": tags,
+                "memoryType": memory_type,
+                "importance": importance,
+            },
+        )
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"mode": "http", "workspace_id": workspace_id}
+
+
+@dataclass
+class HttpRuntimeService(HttpServiceBase):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": {"id": objective.id, "title": objective.title},
+            "step": {"id": step.id, "title": step.title, "capability": step.capability},
+            "template": {
+                "role": template.role,
+                "provider": template.provider,
+                "model": template.model,
+            },
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+        }
+
+    async def execute_task(self, request):
+        return await self._request("/internal/runtime/execute", method="POST", body=request)
+
+
+@dataclass
+class HttpSubAgentService(HttpServiceBase):
+    role_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "research": "researcher",
+            "browser": "browser",
+            "terminal": "coder",
+            "software-development": "coder",
+            "delivery": "writer",
+            "verification": "analyst",
+        }
+    )
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        templates: list[SubAgentTemplate] = []
+        seen: set[str] = set()
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=self.role_map.get(step.capability, "generalist"),
+                    provider=None,
+                    model=None,
+                    tool_ids=None,
+                    max_parallel_tasks=2 if step.capability in {"research", "browser"} else 1,
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        step: MissionStep = params["step"]
+        template: SubAgentTemplate = params["template"]
+        objective: MissionObjective = params["objective"]
+        context: ExecutionContext = params["context"]
+        attempt: int = params.get("attempt", 1)
+
+        payload = {
+            "workspaceId": objective.workspace_id,
+            "title": f"Step: {step.title}",
+            "objective": step.description,
+            "capability": step.capability,
+            "provider": template.provider,
+            "model": template.model,
+            "mode": "live",
+        }
+
+        response = await self._request(
+            "/api/runtime/execute",
+            method="POST",
+            body=payload,
+            auth_context=params.get("auth_context"),
+        )
+
+        diag_payload = response.get("diagnostics", {})
+        diagnostics = StepExecutionDiagnostics(
+            overall_score=float(diag_payload.get("overallScore", 0.0)),
+            evidence_score=float(diag_payload.get("evidenceScore", 0.0)),
+            coverage_score=float(diag_payload.get("coverageScore", 0.0)),
+            verification_score=float(diag_payload.get("verificationScore", 0.0)),
+            failure_class=diag_payload.get("failureClass", "none"),
+            retryable=bool(diag_payload.get("retryable", False)),
+            escalation_required=bool(diag_payload.get("escalationRequired", False)),
+            missing_signals=list(diag_payload.get("missingSignals", [])),
+            recommended_actions=list(diag_payload.get("recommendedActions", [])),
+        )
+
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=step.id,
+                started_at="",
+                attempts=attempt,
+                summary=response.get("summary", ""),
+                diagnostics=diagnostics,
+            ),
+            run=response.get("run", {}),
+            output=response.get("output", {}),
+            memory_text=response.get("memoryText", ""),
+        )
