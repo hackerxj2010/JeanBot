@@ -209,6 +209,8 @@ class FileService(Protocol):
         filename: str,
         content: str,
     ) -> str: ...
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]): ...
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None: ...
 
 
 class PolicyService(Protocol):
@@ -773,6 +775,7 @@ class MissionExecutor:
                     "context": context,
                     "auth_context": context.auth_context,
                     "attempt": attempt,
+                    "runtime": self.runtime,
                 })
                 
                 diagnostics = self.intelligence.assess_step(
@@ -1141,6 +1144,14 @@ class MissionExecutor:
         )
 
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
+        # Attempt to recover existing state if available
+        existing_state = await self.file_service.load_mission_state(record.objective.id)
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            # Merging logic could be more complex, but for now we focus on basic recovery parity
+            record.decision_log.extend(existing_state.get("decision_log", []))
+            record.replan_history.extend(existing_state.get("replan_history", []))
+
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
@@ -1225,6 +1236,14 @@ class MissionExecutor:
                 continue
             
             await self._update_workspace_context(record, context)
+
+            # Persist state after each batch for recovery
+            await self.file_service.save_mission_state(record.objective.id, {
+                "decision_log": record.decision_log,
+                "replan_history": record.replan_history,
+                "plan_version": record.plan_version,
+            })
+
             await self.audit_service.record(
                 "mission.batch.completed",
                 record.objective.id,

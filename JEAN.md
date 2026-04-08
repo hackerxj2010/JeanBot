@@ -5,7 +5,7 @@
 - Secure API gateway with REST and tRPC
 - Tenant/workspace bootstrap and scoped API key flow
 - Mission orchestration with planning, approvals, execution, recovery, transitions, audits, and artifacts
-- Python mission executor package with local adapters, execution service, CLI, and unit coverage
+- Python mission executor package with local and live HTTP adapters, execution service, interactive shell, and unit coverage
 - Local JSON persistence plus Postgres repository adapters
 - Redis/BullMQ queue support plus queue worker
 - Anthropic/OpenAI/GitHub provider runtime with synthetic fallback
@@ -50,4 +50,4 @@
 
 ## Next step
 
-Wire the Python mission runner to live service adapters instead of only deterministic local adapters, then extend it to shared queue/state stores for distributed recovery parity.
+Extend the Python mission runner to shared queue/state stores for distributed recovery parity, and deepen the interactive shell with multi-turn mission steering and artifact visualization.

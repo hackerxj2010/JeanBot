@@ -105,6 +105,12 @@ class StubFileService:
         self.artifacts.append({"path": path, "content": content})
         return path
 
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        pass
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        return None
+
 
 class StubPolicyService:
     def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
