@@ -48,7 +48,7 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    current_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
 
     while True:
@@ -65,6 +65,9 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show current mission status")
+                print("  artifacts         List all mission artifacts")
+                print("  show <artifact_id> Display a specific artifact content")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
@@ -73,6 +76,52 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() == "history":
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                continue
+
+            if line.lower() == "status":
+                bundle = service.build_bundle({"workspace_id": args.workspace_id, "title": "Status check", "objective": "none"})
+                state = await bundle.file_service.load_mission_state(current_mission_id)
+                if not state:
+                    print(f"No active mission found for ID: {current_mission_id}")
+                else:
+                    print(f"\nMission: {state.objective.title}")
+                    print(f"Objective: {state.objective.objective}")
+                    print(f"Plan Version: {state.plan_version or 1}")
+                    if state.plan:
+                        print("\nSteps:")
+                        for step in state.plan.steps:
+                            status_icon = "✓" if step.status == "completed" else "▶" if step.status == "running" else "○"
+                            print(f"  {status_icon} {step.id}: {step.title} ({step.status})")
+                    if last_result:
+                        print(f"\nLast Execution Status: {last_result.status}")
+                        print(f"Verification Summary: {last_result.verification_summary}")
+                continue
+
+            if line.lower() == "artifacts":
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts found.")
+                else:
+                    print(f"\nArtifacts ({len(last_result.artifacts)}):")
+                    for art in last_result.artifacts:
+                        print(f"  - [{art.id[:8]}] {art.title}: {art.path} ({art.kind})")
+                continue
+
+            if line.lower().startswith("show "):
+                artifact_id = line[5:].strip()
+                if not last_result:
+                    print("No mission data available.")
+                    continue
+                target = next((a for a in last_result.artifacts if a.id.startswith(artifact_id)), None)
+                if not target:
+                    print(f"Artifact not found: {artifact_id}")
+                else:
+                    try:
+                        content = Path(target.path).read_text(encoding="utf-8")
+                        print(f"\n--- {target.title} ---")
+                        print(content)
+                        print("--- End of Artifact ---")
+                    except Exception as e:
+                        print(f"Could not read artifact: {e}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -85,22 +134,33 @@ async def run_shell(args: argparse.Namespace):
                     f"Previous summary: {last_result.verification_summary}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
+
+                payload = {
+                    "mission_id": current_mission_id,
+                    "workspace_id": args.workspace_id,
+                    "title": title,
+                    "objective": objective,
+                    "mode": args.mode,
+                }
             else:
                 objective = line
                 title = f"Mission: {line[:30]}..."
 
-            payload = {
-                "mission_id": mission_id,
-                "workspace_id": args.workspace_id,
-                "title": title,
-                "objective": objective,
-                "mode": args.mode,
-            }
+                payload = {
+                    "mission_id": current_mission_id,
+                    "workspace_id": args.workspace_id,
+                    "title": title,
+                    "objective": objective,
+                    "mode": args.mode,
+                }
 
-            print(f"Executing: {title}")
+            print(f"\n[JeanBot] Executing: {title}")
             last_result = await service.execute_payload(payload)
+            if last_result.mission_id:
+                current_mission_id = last_result.mission_id
 
-            print(f"\nStatus: {last_result.status}")
+            print(f"\n--- Mission Result ---")
+            print(f"Status:  {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")
             if last_result.artifacts:
                 print(f"Artifacts: {len(last_result.artifacts)}")
