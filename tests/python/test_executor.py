@@ -105,10 +105,10 @@ class StubFileService:
         self.artifacts.append({"path": path, "content": content})
         return path
 
-    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+    async def save_mission_state(self, record: MissionRecord):
         pass
 
-    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+    async def load_mission_state(self, mission_id: str) -> MissionRecord | None:
         return None
 
 

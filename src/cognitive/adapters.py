@@ -18,6 +18,7 @@ from .executor import (
     ExecutionContext,
     MissionObjective,
     MissionPlan,
+    MissionRecord,
     MissionStep,
     PolicyDecision,
     StepExecutionDiagnostics,
@@ -39,6 +40,18 @@ def stable_hash(value: str) -> str:
 
 def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if isinstance(obj, (list, tuple)):
+        return [asdict_fallback(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    if hasattr(obj, "__dataclass_fields__"):
+        return {k: asdict_fallback(getattr(obj, k)) for k in obj.__dataclass_fields__}
+    if isinstance(obj, Path):
+        return str(obj)
+    return obj
 
 
 @dataclass
@@ -202,15 +215,16 @@ class LocalFileService:
         artifact_dir = self._artifact_dir(mission_id)
         return sorted(str(path) for path in artifact_dir.glob("*"))
 
-    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
-        path = self._state_dir() / f"mission-{mission_id}.json"
-        path.write_text(utc_json(state), encoding="utf-8")
+    async def save_mission_state(self, record: MissionRecord):
+        path = self._state_dir() / f"mission-{record.objective.id}.json"
+        path.write_text(utc_json(asdict_fallback(record)), encoding="utf-8")
 
-    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+    async def load_mission_state(self, mission_id: str) -> MissionRecord | None:
         path = self._state_dir() / f"mission-{mission_id}.json"
         if not path.exists():
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return MissionRecord.from_dict(data)
 
 
 @dataclass

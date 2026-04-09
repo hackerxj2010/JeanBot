@@ -54,6 +54,16 @@ class MissionObjective:
     workspace_id: str
     risk: str = "low"
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionObjective:
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            objective=data["objective"],
+            workspace_id=data["workspace_id"],
+            risk=data.get("risk", "low"),
+        )
+
 
 @dataclass
 class MissionStep:
@@ -66,11 +76,31 @@ class MissionStep:
     depends_on: list[str] = field(default_factory=list)
     assignee: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionStep:
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            description=data["description"],
+            capability=data["capability"],
+            stage=data.get("stage", "execution"),
+            status=data.get("status", "pending"),
+            depends_on=list(data.get("depends_on", [])),
+            assignee=data.get("assignee"),
+        )
+
 
 @dataclass
 class MissionPlan:
     version: int = 1
     steps: list[MissionStep] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionPlan:
+        return cls(
+            version=data.get("version", 1),
+            steps=[MissionStep.from_dict(s) for s in data.get("steps", [])],
+        )
 
 
 @dataclass
@@ -83,30 +113,31 @@ class MissionRecord:
     replan_count: int = 0
     active_execution: ActiveExecutionState | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionRecord:
+        objective = MissionObjective.from_dict(data["objective"])
+        plan = MissionPlan.from_dict(data["plan"]) if data.get("plan") else None
+        active_execution = (
+            ActiveExecutionState.from_dict(data["active_execution"])
+            if data.get("active_execution")
+            else None
+        )
+        return cls(
+            objective=objective,
+            plan=plan,
+            plan_version=data.get("plan_version"),
+            decision_log=list(data.get("decision_log", [])),
+            replan_history=list(data.get("replan_history", [])),
+            replan_count=data.get("replan_count", 0),
+            active_execution=active_execution,
+        )
+
 
 @dataclass
 class ExecutionContext:
     workspace_root: str
     max_parallelism: int = 3
     auth_context: dict | None = None
-
-
-@dataclass
-class StepExecutionRecord:
-    step_id: str
-    started_at: str
-    attempts: int = 1
-    summary: str = ""
-    diagnostics: StepExecutionDiagnostics | None = None
-
-
-@dataclass
-class ActiveExecutionState:
-    started_at: str
-    outputs: dict[str, Any] = field(default_factory=dict)
-    memory_updates: list[str] = field(default_factory=list)
-    step_reports: list[StepExecutionRecord] = field(default_factory=list)
-    artifacts: list[MissionArtifact] = field(default_factory=list)
 
 
 @dataclass
@@ -120,6 +151,63 @@ class StepExecutionDiagnostics:
     escalation_required: bool = False
     missing_signals: list[str] = field(default_factory=list)
     recommended_actions: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StepExecutionDiagnostics:
+        return cls(
+            overall_score=data.get("overall_score", 0.0),
+            evidence_score=data.get("evidence_score", 0.0),
+            coverage_score=data.get("coverage_score", 0.0),
+            verification_score=data.get("verification_score", 0.0),
+            failure_class=data.get("failure_class", "none"),
+            retryable=data.get("retryable", False),
+            escalation_required=data.get("escalation_required", False),
+            missing_signals=list(data.get("missing_signals", [])),
+            recommended_actions=list(data.get("recommended_actions", [])),
+        )
+
+
+@dataclass
+class StepExecutionRecord:
+    step_id: str
+    started_at: str
+    attempts: int = 1
+    summary: str = ""
+    diagnostics: StepExecutionDiagnostics | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StepExecutionRecord:
+        diagnostics = (
+            StepExecutionDiagnostics.from_dict(data["diagnostics"])
+            if data.get("diagnostics")
+            else None
+        )
+        return cls(
+            step_id=data["step_id"],
+            started_at=data["started_at"],
+            attempts=data.get("attempts", 1),
+            summary=data.get("summary", ""),
+            diagnostics=diagnostics,
+        )
+
+
+@dataclass
+class ActiveExecutionState:
+    started_at: str
+    outputs: dict[str, Any] = field(default_factory=dict)
+    memory_updates: list[str] = field(default_factory=list)
+    step_reports: list[StepExecutionRecord] = field(default_factory=list)
+    artifacts: list[MissionArtifact] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ActiveExecutionState:
+        return cls(
+            started_at=data["started_at"],
+            outputs=dict(data.get("outputs", {})),
+            memory_updates=list(data.get("memory_updates", [])),
+            step_reports=[StepExecutionRecord.from_dict(r) for r in data.get("step_reports", [])],
+            artifacts=[MissionArtifact.from_dict(a) for a in data.get("artifacts", [])],
+        )
 
 
 @dataclass
@@ -155,6 +243,17 @@ class MissionArtifact:
     path: str
     created_at: str
     metadata: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionArtifact:
+        return cls(
+            id=data["id"],
+            kind=data["kind"],
+            title=data["title"],
+            path=data["path"],
+            created_at=data["created_at"],
+            metadata=dict(data.get("metadata", {})),
+        )
 
 
 @dataclass
@@ -210,8 +309,8 @@ class FileService(Protocol):
         filename: str,
         content: str,
     ) -> str: ...
-    async def save_mission_state(self, mission_id: str, state: dict[str, Any]): ...
-    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None: ...
+    async def save_mission_state(self, record: MissionRecord): ...
+    async def load_mission_state(self, mission_id: str) -> MissionRecord | None: ...
 
 
 class PolicyService(Protocol):
@@ -1146,12 +1245,15 @@ class MissionExecutor:
 
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
-        existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
+        existing_record = await self.file_service.load_mission_state(record.objective.id)
+        if existing_record:
             print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.decision_log = existing_record.decision_log
+            record.replan_history = existing_record.replan_history
+            record.plan_version = existing_record.plan_version
+            record.replan_count = existing_record.replan_count
+            if existing_record.plan:
+                record.plan = existing_record.plan
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
@@ -1239,11 +1341,7 @@ class MissionExecutor:
             await self._update_workspace_context(record, context)
 
             # Persist state after each batch for recovery
-            await self.file_service.save_mission_state(record.objective.id, {
-                "decision_log": record.decision_log,
-                "replan_history": record.replan_history,
-                "plan_version": record.plan_version,
-            })
+            await self.file_service.save_mission_state(record)
 
             await self.audit_service.record(
                 "mission.batch.completed",
