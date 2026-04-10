@@ -1147,17 +1147,28 @@ class MissionExecutor:
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
         existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
-            print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
+
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            # Merging logic could be more complex, but for now we focus on basic recovery parity
+            record.decision_log.extend(existing_state.get("decision_log", []))
+            record.replan_history.extend(existing_state.get("replan_history", []))
+
+            # Restore step statuses if they match
+            if record.plan and "steps" in existing_state:
+                persisted_steps = {s["id"]: s for s in existing_state["steps"]}
+                for step in record.plan.steps:
+                    if step.id in persisted_steps:
+                        step.status = persisted_steps[step.id].get("status", step.status)
+
+            # Restore previous run metadata if available
+            started_at = existing_state.get("started_at", started_at)
         
         plan = self._require_plan(record)
         remaining_steps = {step.id for step in plan.steps}
@@ -1243,6 +1254,11 @@ class MissionExecutor:
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "started_at": started_at,
+                "steps": [
+                    {"id": s.id, "status": s.status}
+                    for s in (record.plan.steps if record.plan else [])
+                ]
             })
 
             await self.audit_service.record(
