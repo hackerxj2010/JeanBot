@@ -48,7 +48,7 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    current_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
 
     while True:
@@ -63,16 +63,64 @@ async def run_shell(args: argparse.Namespace):
 
             if line.lower() == "help":
                 print("Commands:")
-                print("  help              Show this help")
-                print("  history           Show command history")
-                print("  exit | quit       Exit shell")
-                print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
+                print("  help                Show this help")
+                print("  history             Show command history")
+                print("  status              Show current mission status")
+                print("  artifacts           List produced artifacts")
+                print("  show <id>           Show artifact details")
+                print("  exit | quit         Exit shell")
+                print("  <objective>         Plan and execute a mission")
+                print("  refine <feedback>   Refine results with feedback")
                 continue
 
             if line.lower() == "history":
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                continue
+
+            if line.lower() == "status":
+                if not last_result:
+                    print("No active mission.")
+                else:
+                    print(f"Mission ID: {last_result.mission_id}")
+                    print(f"Status: {last_result.status}")
+                    print(f"Verification: {last_result.verification_summary}")
+                    print(f"Steps: {len(last_result.step_reports)}")
+                continue
+
+            if line.lower() == "artifacts":
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts produced yet.")
+                else:
+                    print(f"Artifacts for {last_result.mission_id}:")
+                    for a in last_result.artifacts:
+                        print(f"  [{a.id[:8]}] {a.title} ({a.kind})")
+                continue
+
+            if line.lower().startswith("show "):
+                artifact_id_prefix = line[5:].strip()
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts available.")
+                else:
+                    found = [a for a in last_result.artifacts if a.id.startswith(artifact_id_prefix)]
+                    if not found:
+                        print(f"Artifact starting with '{artifact_id_prefix}' not found.")
+                    else:
+                        artifact = found[0]
+                        print(f"Artifact: {artifact.title}")
+                        print(f"ID: {artifact.id}")
+                        print(f"Kind: {artifact.kind}")
+                        print(f"Path: {artifact.path}")
+                        print(f"Created: {artifact.created_at}")
+                        if artifact.path.endswith(".md") or artifact.path.endswith(".txt"):
+                            try:
+                                content = Path(artifact.path).read_text(encoding="utf-8")
+                                print("\nContent:")
+                                print("-" * 40)
+                                print(content)
+                                print("-" * 40)
+                            except Exception as e:
+                                print(f"Could not read content: {e}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -90,7 +138,7 @@ async def run_shell(args: argparse.Namespace):
                 title = f"Mission: {line[:30]}..."
 
             payload = {
-                "mission_id": mission_id,
+                "mission_id": current_mission_id,
                 "workspace_id": args.workspace_id,
                 "title": title,
                 "objective": objective,
