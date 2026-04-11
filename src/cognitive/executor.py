@@ -156,6 +156,17 @@ class MissionArtifact:
     created_at: str
     metadata: dict = field(default_factory=dict)
 
+    @classmethod
+    def from_dict(cls, data: dict) -> MissionArtifact:
+        return cls(
+            id=data["id"],
+            kind=data["kind"],
+            title=data["title"],
+            path=data["path"],
+            created_at=data["created_at"],
+            metadata=dict(data.get("metadata", {})),
+        )
+
 
 @dataclass
 class MissionRunResult:
@@ -173,14 +184,44 @@ class MissionRunResult:
     started_at: str
     finished_at: str
 
+    @classmethod
+    def from_dict(cls, data: dict) -> MissionRunResult:
+        return cls(
+            mission_id=data["mission_id"],
+            status=data["status"],
+            execution_mode=data["execution_mode"],
+            verification_summary=data["verification_summary"],
+            outputs=dict(data.get("outputs", {})),
+            memory_updates=list(data.get("memory_updates", [])),
+            step_reports=[
+                StepExecutionRecord(
+                    step_id=r["step_id"],
+                    started_at=r["started_at"],
+                    attempts=r["attempts"],
+                    summary=r["summary"],
+                    diagnostics=StepExecutionDiagnostics(**r["diagnostics"])
+                    if r.get("diagnostics")
+                    else None,
+                )
+                for r in data.get("step_reports", [])
+            ],
+            artifacts=[MissionArtifact.from_dict(a) for a in data.get("artifacts", [])],
+            metrics=dict(data.get("metrics", {})),
+            gaps=list(data.get("gaps", [])),
+            decision_log=list(data.get("decision_log", [])),
+            started_at=data["started_at"],
+            finished_at=data["finished_at"],
+        )
+
 
 class AgentRuntimeService(Protocol):
     def prepare_frame(self, objective, step, plan, template, context): ...
-    def execute_task(self, request): ...
+    async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]: ...
 
 
 class AuditService(Protocol):
-    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None: ...
+    def summarize(self) -> dict[str, Any]: ...
 
 
 class MemoryService(Protocol):
@@ -191,7 +232,8 @@ class MemoryService(Protocol):
         tags: list[str],
         memory_type: str,
         importance: float,
-    ): ...
+    ) -> None: ...
+    def summarize(self, workspace_id: str) -> dict[str, Any]: ...
 
 
 class FileService(Protocol):
@@ -233,47 +275,49 @@ class MissionExecutionIntelligence:
     ) -> StepExecutionDiagnostics:
         verification = output.get("verification", {})
         tool_calls = output.get("toolCalls", [])
-        
+
         failure_class = "none"
         retryable = False
         escalation_required = False
         missing_signals = []
         recommended_actions = []
-        
+
         if not output.get("finalText"):
             failure_class = "empty_output"
             retryable = True
             missing_signals.append("No final text output")
             recommended_actions.append("Retry with clearer instructions")
-        
+
         if not verification.get("passed"):
             failure_class = "verification_failed"
             retryable = True
             missing_signals.append("Verification did not pass")
             recommended_actions.append("Review and fix based on verification feedback")
-        
+
         if tool_calls and all(tc.get("ok", True) is False for tc in tool_calls):
             failure_class = "all_tools_failed"
             retryable = True
             missing_signals.append("All tool calls failed")
             recommended_actions.append("Check tool configuration and permissions")
-        
+
         evidence_score = 0.5
         coverage_score = 0.5
         verification_score = 0.5
-        
+
         if output.get("finalText"):
             evidence_score = min(1.0, len(output["finalText"]) / 500)
         if verification.get("passed"):
             verification_score = 1.0
         if tool_calls:
-            coverage_score = min(1.0, len([tc for tc in tool_calls if tc.get("ok")]) / len(tool_calls))
-        
+            coverage_score = min(
+                1.0, len([tc for tc in tool_calls if tc.get("ok")]) / len(tool_calls)
+            )
+
         overall_score = (evidence_score + coverage_score + verification_score) / 3
-        
+
         if failure_class == "none":
             retryable = False
-        
+
         return StepExecutionDiagnostics(
             overall_score=overall_score,
             evidence_score=evidence_score,
@@ -285,6 +329,43 @@ class MissionExecutionIntelligence:
             missing_signals=missing_signals,
             recommended_actions=recommended_actions,
         )
+
+    def assess_step_qualitative(
+        self,
+        step: MissionStep,
+        output: dict,
+        runtime_service: AgentRuntimeService,
+    ) -> Awaitable[StepExecutionDiagnostics]:
+        """
+        Performs a qualitative assessment of a step outcome using the runtime service
+        to judge the quality of the work against the original objective.
+        """
+
+        async def _assess():
+            assessment_request = {
+                "objective": f"Assess if step '{step.title}' was completed: {step.description}",
+                "context": f"Output to assess: {output.get('finalText', '')[:1000]}",
+                "providerMode": "live",
+                "capability": "verification",
+            }
+            try:
+                raw_assessment = await runtime_service.execute_task(assessment_request)
+                # Qualitative assessment logic would go here, for now we merge with basic assessment
+                basic = self.assess_step(
+                    step, output, PolicyDecision(risk="low"), attempt=1
+                )
+                if raw_assessment.get("verification", {}).get("ok") is False:
+                    basic.overall_score *= 0.8
+                    basic.verification_score = 0.3
+                    basic.failure_class = "qualitative_failure"
+                    basic.missing_signals.append("Qualitative assessment failed")
+                return basic
+            except Exception:
+                return self.assess_step(
+                    step, output, PolicyDecision(risk="low"), attempt=1
+                )
+
+        return _assess()
 
     def build_mission_metrics(
         self,
@@ -779,12 +860,20 @@ class MissionExecutor:
                     "runtime": self.runtime,
                 })
                 
-                diagnostics = self.intelligence.assess_step(
-                    step,
-                    sub_agent_result.output,
-                    policy_decision,
-                    attempt,
-                )
+                if attempt == 1 and hasattr(self.runtime, "base_url"):
+                    # Use qualitative assessment for the first attempt in live mode
+                    diagnostics = await self.intelligence.assess_step_qualitative(
+                        step,
+                        sub_agent_result.output,
+                        self.runtime,
+                    )
+                else:
+                    diagnostics = self.intelligence.assess_step(
+                        step,
+                        sub_agent_result.output,
+                        policy_decision,
+                        attempt,
+                    )
                 
                 await self.audit_service.record(
                     "mission.step.attempt.assessed",

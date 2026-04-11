@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import random
-from dataclasses import asdict, dataclass, field
+import urllib.request
+import asyncio
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +41,15 @@ def stable_hash(value: str) -> str:
 
 
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if is_dataclass(obj):
+        return asdict(obj)
+    return str(obj)
 
 
 @dataclass
@@ -86,6 +97,90 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpAuditService:
+    base_url: str = field(
+        default_factory=lambda: os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
+    )
+    token: str = field(
+        default_factory=lambda: os.environ.get(
+            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
+        )
+    )
+
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None:
+        url = f"{self.base_url.rstrip('/')}/internal/audit"
+        headers = {
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+        payload = {
+            "event": event,
+            "entityId": entity_id,
+            "service": service,
+            "data": data,
+            "timestamp": utc_now_iso(),
+        }
+
+        def _do_request():
+            req = urllib.request.Request(
+                url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=30) as f:
+                return f.read()
+
+        await asyncio.to_thread(_do_request)
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "summary": "Audit records are persisted remotely."}
+
+
+@dataclass
+class HttpMemoryService:
+    base_url: str = field(
+        default_factory=lambda: os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
+    )
+    token: str = field(
+        default_factory=lambda: os.environ.get(
+            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
+        )
+    )
+
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ) -> None:
+        url = f"{self.base_url.rstrip('/')}/internal/memory/workspaces/{workspace_id}/remember"
+        headers = {
+            "x-jeanbot-internal-service": "agent-orchestrator",
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+        payload = {
+            "text": text,
+            "tags": tags,
+            "type": memory_type,
+            "importance": importance,
+        }
+
+        def _do_request():
+            req = urllib.request.Request(
+                url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST"
+            )
+            with urllib.request.urlopen(req, timeout=30) as f:
+                return f.read()
+
+        await asyncio.to_thread(_do_request)
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"mode": "http", "workspace_id": workspace_id, "summary": "Memories are persisted remotely."}
 
 
 @dataclass
@@ -235,7 +330,7 @@ class StaticPolicyService:
 @dataclass
 class HttpRuntimeService:
     base_url: str = field(
-        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
+        default_factory=lambda: os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
     )
     token: str = field(
         default_factory=lambda: os.environ.get(
@@ -266,20 +361,28 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
-        if httpx is None:
-            raise RuntimeError(
-                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
-            )
         url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
+        auth_context = request.get("auth_context") or {}
+        auth_header = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+
         headers = {
             "x-jeanbot-internal-service": "agent-orchestrator",
             "x-jeanbot-internal-token": self.token,
+            "x-jeanbot-auth-context": auth_header,
             "content-type": "application/json",
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, headers=headers, json=request)
-            response.raise_for_status()
-            return response.json()
+
+        def _do_request():
+            req = urllib.request.Request(
+                url,
+                data=json.dumps(request, default=asdict_fallback).encode("utf-8"),
+                headers=headers,
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=300) as f:
+                return json.loads(f.read().decode("utf-8"))
+
+        return await asyncio.to_thread(_do_request)
 
 
 @dataclass
@@ -359,6 +462,7 @@ class HttpSubAgentService:
         template: SubAgentTemplate = params["template"]
         context: ExecutionContext = params["context"]
         attempt: int = params.get("attempt", 1)
+        failure_policy = params.get("failure_policy")
 
         request = {
             "objective": {
@@ -410,6 +514,8 @@ class HttpSubAgentService:
                 "maxParallelism": context.max_parallelism,
             },
             "providerMode": "live",
+            "auth_context": params.get("auth_context"),
+            "failurePolicy": failure_policy,
         }
 
         raw_result = await self.runtime.execute_task(request)

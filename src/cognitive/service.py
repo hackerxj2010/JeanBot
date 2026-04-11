@@ -9,6 +9,8 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpMemoryService,
     HttpRuntimeService,
     HttpSubAgentService,
     LocalAuditService,
@@ -20,7 +22,11 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AgentRuntimeService,
+    AuditService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -28,8 +34,10 @@ from .executor import (
     MissionRecord,
     MissionRunResult,
     MissionStep,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
 )
 
 
@@ -38,12 +46,12 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
+    policy_service: PolicyService
 
 
 @dataclass
@@ -83,15 +91,14 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
 
         execution_mode = mission_payload.get("mode", self.mode)
 
         if execution_mode == "live":
             runtime_service = HttpRuntimeService()
             subagent_service = HttpSubAgentService(runtime=runtime_service)
+            audit_service = HttpAuditService()
+            memory_service = HttpMemoryService()
         else:
             runtime_service = DeterministicRuntimeService(
                 provider=mission_payload.get("provider", self.provider),
@@ -100,6 +107,10 @@ class MissionExecutorService:
             subagent_service = DeterministicSubAgentService(
                 failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
             )
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+
+        file_service = LocalFileService(output_root=self.workspace_root)
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
