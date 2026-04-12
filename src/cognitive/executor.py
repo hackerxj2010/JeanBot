@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Protocol
 
@@ -1150,8 +1150,16 @@ class MissionExecutor:
         if existing_state:
             print(f"Resuming mission {record.objective.id} from persisted state.")
             # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.replan_count = existing_state.get("replan_count", 0)
+
+            # Sync plan status if available in persisted state
+            if "plan" in existing_state and existing_state["plan"] and record.plan:
+                persisted_steps = {s["id"]: s["status"] for s in existing_state["plan"].get("steps", [])}
+                for step in record.plan.steps:
+                    if step.id in persisted_steps:
+                        step.status = persisted_steps[step.id]
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
@@ -1160,7 +1168,9 @@ class MissionExecutor:
         artifacts: list[MissionArtifact] = []
         
         plan = self._require_plan(record)
-        remaining_steps = {step.id for step in plan.steps}
+        remaining_steps = {
+            step.id for step in plan.steps if step.status not in ("completed", "skipped")
+        }
         
         while remaining_steps:
             active_plan = self._require_plan(record)
@@ -1240,9 +1250,12 @@ class MissionExecutor:
 
             # Persist state after each batch for recovery
             await self.file_service.save_mission_state(record.objective.id, {
+                "objective": asdict(record.objective),
+                "plan": asdict(record.plan) if record.plan else None,
+                "plan_version": record.plan_version,
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
-                "plan_version": record.plan_version,
+                "replan_count": record.replan_count,
             })
 
             await self.audit_service.record(
