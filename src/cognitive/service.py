@@ -126,6 +126,24 @@ class MissionExecutorService:
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
+        # If payload only has mission_id/id and workspace_id, try loading existing record
+        workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
+        mission_id = mission_payload.get("mission_id") or mission_payload.get("id")
+
+        if mission_id and workspace_id and len(mission_payload) <= 3:
+            state = await LocalFileService(output_root=self.workspace_root).load_mission_state(mission_id)
+            if state and "objective" in state:
+                # Reconstruct payload from persisted objective and steps
+                mission_payload = {
+                    **mission_payload,
+                    "title": state["objective"]["title"],
+                    "objective": state["objective"]["objective"],
+                    "steps": state.get("plan", {}).get("steps", []),
+                    "plan_version": state.get("plan_version", 1),
+                    "decision_log": state.get("decision_log", []),
+                    "replan_history": state.get("replan_history", []),
+                }
+
         bundle = self.build_bundle(mission_payload)
         result = await bundle.executor.execute(bundle.record, bundle.context)
         self._persist_run_summary(bundle, result)
