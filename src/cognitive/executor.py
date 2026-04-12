@@ -211,6 +211,15 @@ class FileService(Protocol):
     ) -> str: ...
 
 
+class BrowserService(Protocol):
+    async def navigate(self, workspace_id: str, url: str) -> dict: ...
+    async def capture(self, workspace_id: str, session_id: str) -> dict: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, workspace_id: str, command: str, cwd: str) -> dict: ...
+
+
 class PolicyService(Protocol):
     def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
 
@@ -464,6 +473,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -471,6 +482,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 

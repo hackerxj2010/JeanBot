@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import base64
 import hashlib
 import json
 import random
+import urllib.request
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,6 +54,54 @@ class MemoryRecord:
 
 
 @dataclass
+class HttpBaseService:
+    api_url: str
+    internal_token: str
+    service_name: str = "jeanbot-python-executor"
+    timeout: float = 10.0
+
+    def _headers(self, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "x-jeanbot-internal-service": self.service_name,
+            "x-jeanbot-internal-token": self.internal_token,
+            "Content-Type": "application/json",
+        }
+        if auth_context:
+            encoded = base64.b64encode(json.dumps(auth_context).encode("utf-8")).decode("utf-8")
+            headers["x-jeanbot-auth-context"] = encoded
+        return headers
+
+    def _post(self, url: str, data: dict, auth_context: dict | None = None) -> dict[str, Any]:
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(data).encode("utf-8"),
+            headers=self._headers(auth_context),
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=self.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": service,
+            "details": data,
+        }
+        url = f"{self.api_url}/api/audit"
+        try:
+            await asyncio.to_thread(self._post, url, payload)
+        except Exception:
+            pass
+
+    def summarize(self) -> dict[str, Any]:
+        return {"total_records": 0, "events": {}}
+
+
+@dataclass
 class LocalAuditService:
     output_root: str
     records: list[AuditEventRecord] = field(default_factory=list)
@@ -78,6 +129,29 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpMemoryService(HttpBaseService):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        url = f"{self.api_url}/api/workspaces/{workspace_id}/memory"
+        payload = {
+            "text": text,
+            "tags": tags,
+            "scope": "long-term" if memory_type == "long-term" else "short-term",
+            "importance": importance,
+        }
+        await asyncio.to_thread(self._post, url, payload)
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "memory_count": 0, "top_tags": []}
 
 
 @dataclass
@@ -144,6 +218,81 @@ class LocalMemoryService:
 
 
 @dataclass
+class HttpBrowserService(HttpBaseService):
+    async def navigate(self, workspace_id: str, url: str) -> dict:
+        api_url = f"{self.api_url}/api/browser/navigate"
+        payload = {"workspaceId": workspace_id, "url": url}
+        return await asyncio.to_thread(self._post, api_url, payload)
+
+    async def capture(self, workspace_id: str, session_id: str) -> dict:
+        api_url = f"{self.api_url}/api/browser/capture"
+        payload = {"workspaceId": workspace_id, "sessionId": session_id}
+        return await asyncio.to_thread(self._post, api_url, payload)
+
+
+@dataclass
+class HttpTerminalService(HttpBaseService):
+    async def run(self, workspace_id: str, command: str, cwd: str) -> dict:
+        api_url = f"{self.api_url}/api/terminal/run"
+        payload = {"workspaceId": workspace_id, "command": command, "cwd": cwd}
+        return await asyncio.to_thread(self._post, api_url, payload)
+
+
+@dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        url = f"{self.api_url}/api/tools/execute"
+        payload = {
+            "toolId": "filesystem.workspace.context.update",
+            "action": "update-workspace-context",
+            "payload": {
+                "workspaceRoot": workspace_root,
+                "missionTitle": mission_title,
+                "completed": completed_steps,
+                "inProgress": running_steps,
+                "upcoming": pending_steps,
+            },
+        }
+        try:
+            await asyncio.to_thread(self._post, url, payload)
+        except Exception:
+            pass
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        url = f"{self.api_url}/api/tools/execute"
+        payload = {
+            "toolId": "filesystem.artifact.write",
+            "action": "write-artifact",
+            "payload": {
+                "workspaceRoot": workspace_root,
+                "fileName": filename,
+                "content": content,
+            },
+        }
+        try:
+            result = await asyncio.to_thread(self._post, url, payload)
+            return result.get("payload", {}).get("path", filename)
+        except Exception:
+            return filename
+
+    def artifact_paths(self, mission_id: str) -> list[str]:
+        return []
+
+
+@dataclass
 class LocalFileService:
     output_root: str
     context_history: list[dict[str, Any]] = field(default_factory=list)
@@ -190,6 +339,95 @@ class LocalFileService:
     def artifact_paths(self, mission_id: str) -> list[str]:
         artifact_dir = self._artifact_dir(mission_id)
         return sorted(str(path) for path in artifact_dir.glob("*"))
+
+
+@dataclass
+class HttpPolicyService(HttpBaseService):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        return PolicyDecision(approval_required=False, risk="low")
+
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
+    def prepare_frame(
+        self,
+        objective: MissionObjective,
+        step: MissionStep,
+        plan: MissionPlan,
+        template: SubAgentTemplate,
+        context: ExecutionContext,
+    ) -> dict[str, Any]:
+        return {
+            "mission": asdict(objective),
+            "step": asdict(step),
+            "template": asdict(template),
+            "context": {
+                "workspace_root": context.workspace_root,
+                "max_parallelism": context.max_parallelism,
+            },
+        }
+
+    def execute_task(self, request):
+        url = f"{self.api_url}/api/runtime/execute"
+        return self._post(url, request, request.get("authContext"))
+
+
+@dataclass
+class HttpSubAgentService(HttpBaseService):
+    role_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "reasoning": "strategist",
+            "planning": "planner",
+            "terminal": "terminal-operator",
+            "browser": "browser-operator",
+            "filesystem": "file-operator",
+            "memory": "memory-curator",
+            "research": "researcher",
+            "software-development": "coder",
+            "data-analysis": "analyst",
+            "verification": "analyst",
+        }
+    )
+
+    def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        templates: list[SubAgentTemplate] = []
+        seen: set[str] = set()
+        for step in plan.steps:
+            if step.capability in seen:
+                continue
+            seen.add(step.capability)
+            templates.append(
+                SubAgentTemplate(
+                    specialization=step.capability,
+                    role=self.role_map.get(step.capability, step.capability),
+                    tool_ids=[],
+                )
+            )
+        return templates
+
+    async def run_step(self, params: dict) -> SubAgentExecutionResult:
+        url = f"{self.api_url}/api/runtime/execute"
+        payload = {
+            "workspaceId": params["objective"].workspace_id,
+            "title": params["objective"].title,
+            "objective": params["objective"].objective,
+            "capability": params["step"].capability,
+            "mode": "live" if params.get("mode") == "live" else "synthetic",
+        }
+        raw_result = await asyncio.to_thread(self._post, url, payload, params.get("auth_context"))
+        return SubAgentExecutionResult(
+            step_report=StepExecutionRecord(
+                step_id=params["step"].id,
+                started_at="",
+                summary=raw_result.get("finalText", ""),
+            ),
+            run={
+                "id": raw_result.get("id", "run-id"),
+                "status": "completed",
+            },
+            output=raw_result,
+            memory_text=raw_result.get("finalText", ""),
+        )
 
 
 @dataclass

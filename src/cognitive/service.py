@@ -6,9 +6,19 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import os
+
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpBrowserService,
+    HttpFileService,
+    HttpMemoryService,
+    HttpPolicyService,
+    HttpRuntimeService,
+    HttpSubAgentService,
+    HttpTerminalService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -18,7 +28,12 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AgentRuntimeService,
+    AuditService,
+    BrowserService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -26,8 +41,11 @@ from .executor import (
     MissionRecord,
     MissionRunResult,
     MissionStep,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
+    TerminalService,
 )
 
 
@@ -36,23 +54,37 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
+    policy_service: PolicyService
+    browser_service: BrowserService | None = None
+    terminal_service: TerminalService | None = None
 
 
 @dataclass
 class MissionExecutorService:
     workspace_root: str
+    mode: str = "local"
+    api_url: str = "http://localhost:8080"
+    internal_token: str = "jeanbot-internal-dev-token"
     provider: str = "ollama"
     model: str = "glm-5:cloud"
     max_parallelism: int = 3
     approval_required: bool = False
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
+
+    def __post_init__(self):
+        # Environment variables act as defaults if not explicitly provided
+        if self.mode == "local":
+            self.mode = os.environ.get("JEANBOT_SERVICE_MODE", self.mode)
+        if self.api_url == "http://localhost:8080":
+            self.api_url = os.environ.get("JEANBOT_API_URL", self.api_url)
+        if self.internal_token == "jeanbot-internal-dev-token":
+            self.internal_token = os.environ.get("INTERNAL_SERVICE_TOKEN", self.internal_token)
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -80,21 +112,42 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
-        runtime_service = DeterministicRuntimeService(
-            provider=mission_payload.get("provider", self.provider),
-            model=mission_payload.get("model", self.model),
-        )
-        subagent_service = DeterministicSubAgentService(
-            failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
-        )
-        policy_service = StaticPolicyService(
-            approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
-            default_risk=mission_payload.get("risk", "low"),
-            capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
-        )
+        mode = mission_payload.get("mode", self.mode)
+        api_url = mission_payload.get("api_url", self.api_url)
+        token = mission_payload.get("token", self.internal_token)
+
+        browser_service: BrowserService | None = None
+        terminal_service: TerminalService | None = None
+
+        if mode == "http":
+            audit_service = HttpAuditService(api_url=api_url, internal_token=token)
+            memory_service = HttpMemoryService(api_url=api_url, internal_token=token)
+            runtime_service = HttpRuntimeService(api_url=api_url, internal_token=token)
+            subagent_service = HttpSubAgentService(api_url=api_url, internal_token=token)
+            policy_service = HttpPolicyService(api_url=api_url, internal_token=token)
+            file_service = HttpFileService(api_url=api_url, internal_token=token)
+            browser_service = HttpBrowserService(api_url=api_url, internal_token=token)
+            terminal_service = HttpTerminalService(api_url=api_url, internal_token=token)
+        else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
+            runtime_service = DeterministicRuntimeService(
+                provider=mission_payload.get("provider", self.provider),
+                model=mission_payload.get("model", self.model),
+            )
+            subagent_service = DeterministicSubAgentService(
+                failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
+            )
+            policy_service = StaticPolicyService(
+                approval_required=bool(
+                    mission_payload.get("approval_required", self.approval_required)
+                ),
+                default_risk=mission_payload.get("risk", "low"),
+                capability_risk=dict(
+                    self.capability_risk | mission_payload.get("capability_risk", {})
+                ),
+            )
         executor = MissionExecutor(
             runtime=runtime_service,
             memory_service=memory_service,
@@ -102,6 +155,8 @@ class MissionExecutorService:
             sub_agent_service=subagent_service,
             file_service=file_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
         return MissionExecutionBundle(
             record=record,
@@ -113,6 +168,8 @@ class MissionExecutorService:
             runtime_service=runtime_service,
             subagent_service=subagent_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
