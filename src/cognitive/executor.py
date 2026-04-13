@@ -54,6 +54,16 @@ class MissionObjective:
     workspace_id: str
     risk: str = "low"
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionObjective:
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            objective=data["objective"],
+            workspace_id=data.get("workspace_id") or data.get("workspaceId", "unknown"),
+            risk=data.get("risk", "low"),
+        )
+
 
 @dataclass
 class MissionStep:
@@ -66,11 +76,31 @@ class MissionStep:
     depends_on: list[str] = field(default_factory=list)
     assignee: str | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionStep:
+        return cls(
+            id=data["id"],
+            title=data["title"],
+            description=data["description"],
+            capability=data["capability"],
+            stage=data.get("stage", "execution"),
+            status=data.get("status", "pending"),
+            depends_on=list(data.get("depends_on", data.get("dependsOn", []))),
+            assignee=data.get("assignee"),
+        )
+
 
 @dataclass
 class MissionPlan:
     version: int = 1
     steps: list[MissionStep] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionPlan:
+        return cls(
+            version=data.get("version", 1),
+            steps=[MissionStep.from_dict(s) for s in data.get("steps", [])],
+        )
 
 
 @dataclass
@@ -82,6 +112,29 @@ class MissionRecord:
     replan_history: list[dict] = field(default_factory=list)
     replan_count: int = 0
     active_execution: ActiveExecutionState | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionRecord:
+        objective = MissionObjective.from_dict(data["objective"])
+        plan = MissionPlan.from_dict(data["plan"]) if data.get("plan") else None
+        active_execution = (
+            ActiveExecutionState.from_dict(data["active_execution"])
+            if data.get("active_execution")
+            else (
+                ActiveExecutionState.from_dict(data["activeExecution"])
+                if data.get("activeExecution")
+                else None
+            )
+        )
+        return cls(
+            objective=objective,
+            plan=plan,
+            plan_version=data.get("plan_version") or data.get("planVersion"),
+            decision_log=list(data.get("decision_log", data.get("decisionLog", []))),
+            replan_history=list(data.get("replan_history", data.get("replanHistory", []))),
+            replan_count=int(data.get("replan_count", data.get("replanCount", 0))),
+            active_execution=active_execution,
+        )
 
 
 @dataclass
@@ -99,6 +152,17 @@ class StepExecutionRecord:
     summary: str = ""
     diagnostics: StepExecutionDiagnostics | None = None
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StepExecutionRecord:
+        diag_data = data.get("diagnostics")
+        return cls(
+            step_id=data.get("step_id") or data.get("stepId", "unknown"),
+            started_at=data.get("started_at") or data.get("startedAt", utc_now_iso()),
+            attempts=int(data.get("attempts", 1)),
+            summary=data.get("summary", ""),
+            diagnostics=StepExecutionDiagnostics.from_dict(diag_data) if diag_data else None,
+        )
+
 
 @dataclass
 class ActiveExecutionState:
@@ -107,6 +171,19 @@ class ActiveExecutionState:
     memory_updates: list[str] = field(default_factory=list)
     step_reports: list[StepExecutionRecord] = field(default_factory=list)
     artifacts: list[MissionArtifact] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ActiveExecutionState:
+        return cls(
+            started_at=data.get("started_at") or data.get("startedAt", utc_now_iso()),
+            outputs=dict(data.get("outputs", {})),
+            memory_updates=list(data.get("memory_updates", data.get("memoryUpdates", []))),
+            step_reports=[
+                StepExecutionRecord.from_dict(r)
+                for r in data.get("step_reports", data.get("stepReports", []))
+            ],
+            artifacts=[MissionArtifact.from_dict(a) for a in data.get("artifacts", [])],
+        )
 
 
 @dataclass
@@ -120,6 +197,26 @@ class StepExecutionDiagnostics:
     escalation_required: bool = False
     missing_signals: list[str] = field(default_factory=list)
     recommended_actions: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> StepExecutionDiagnostics:
+        return cls(
+            overall_score=float(data.get("overall_score", data.get("overallScore", 0.0))),
+            evidence_score=float(data.get("evidence_score", data.get("evidenceScore", 0.0))),
+            coverage_score=float(data.get("coverage_score", data.get("coverageScore", 0.0))),
+            verification_score=float(
+                data.get("verification_score", data.get("verificationScore", 0.0))
+            ),
+            failure_class=data.get("failure_class", data.get("failureClass", "none")),
+            retryable=bool(data.get("retryable", False)),
+            escalation_required=bool(
+                data.get("escalation_required", data.get("escalationRequired", False))
+            ),
+            missing_signals=list(data.get("missing_signals", data.get("missingSignals", []))),
+            recommended_actions=list(
+                data.get("recommended_actions", data.get("recommendedActions", []))
+            ),
+        )
 
 
 @dataclass
@@ -155,6 +252,17 @@ class MissionArtifact:
     path: str
     created_at: str
     metadata: dict = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> MissionArtifact:
+        return cls(
+            id=data["id"],
+            kind=data["kind"],
+            title=data["title"],
+            path=data["path"],
+            created_at=data.get("created_at") or data.get("createdAt", utc_now_iso()),
+            metadata=dict(data.get("metadata", {})),
+        )
 
 
 @dataclass
@@ -216,6 +324,16 @@ class FileService(Protocol):
 
 class PolicyService(Protocol):
     def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
+
+
+class BrowserService(Protocol):
+    async def navigate(self, mission_id: str, url: str) -> dict[str, Any]: ...
+    async def capture(self, mission_id: str) -> str: ...
+    async def extract(self, mission_id: str, selectors: list[str]) -> dict[str, Any]: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, mission_id: str, command: str, cwd: str | None = None) -> dict[str, Any]: ...
 
 
 class SubAgentService(Protocol):
@@ -467,6 +585,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -474,6 +594,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 
@@ -1146,18 +1268,41 @@ class MissionExecutor:
 
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
-        existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
+        existing_state_data = await self.file_service.load_mission_state(record.objective.id)
+        if existing_state_data:
             print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            # We reconstruct a full record to properly merge states
+            try:
+                # Merge plan statuses if the objective is the same
+                existing_record = MissionRecord.from_dict(existing_state_data)
+                if existing_record.objective.id == record.objective.id:
+                    if existing_record.plan and record.plan:
+                        # Map existing statuses back to current plan
+                        status_map = {s.id: s.status for s in existing_record.plan.steps}
+                        for step in record.plan.steps:
+                            if step.id in status_map:
+                                step.status = status_map[step.id]
+
+                    record.decision_log = existing_record.decision_log
+                    record.replan_history = existing_record.replan_history
+                    record.plan_version = existing_record.plan_version
+                    record.active_execution = existing_record.active_execution
+            except Exception as e:
+                print(f"Warning: could not fully reconstruct mission state: {e}")
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
+
+        # Initialize from active_execution if present (for resumption)
+        if record.active_execution:
+            started_at = record.active_execution.started_at
+            outputs = dict(record.active_execution.outputs)
+            memory_updates = list(record.active_execution.memory_updates)
+            step_reports = list(record.active_execution.step_reports)
+            artifacts = list(record.active_execution.artifacts)
         
         plan = self._require_plan(record)
         remaining_steps = {step.id for step in plan.steps}
@@ -1239,11 +1384,16 @@ class MissionExecutor:
             await self._update_workspace_context(record, context)
 
             # Persist state after each batch for recovery
-            await self.file_service.save_mission_state(record.objective.id, {
-                "decision_log": record.decision_log,
-                "replan_history": record.replan_history,
-                "plan_version": record.plan_version,
-            })
+            record.active_execution = ActiveExecutionState(
+                started_at=started_at,
+                outputs=outputs,
+                memory_updates=memory_updates,
+                step_reports=step_reports,
+                artifacts=artifacts,
+            )
+            # Persist full state for recovery using asdict_fallback
+            from .adapters import asdict_fallback
+            await self.file_service.save_mission_state(record.objective.id, asdict_fallback(record))
 
             await self.audit_service.record(
                 "mission.batch.completed",

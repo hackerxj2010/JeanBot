@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import random
-from dataclasses import asdict, dataclass, field
+import asyncio
+from dataclasses import asdict, dataclass, field, is_dataclass
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +40,17 @@ def stable_hash(value: str) -> str:
 
 
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, indent=2, sort_keys=True, default=asdict_fallback)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if is_dataclass(obj):
+        return asdict(obj)
+    if isinstance(obj, Path):
+        return str(obj)
+    if hasattr(obj, "__dict__"):
+        return obj.__dict__
+    return str(obj)
 
 
 @dataclass
@@ -86,6 +98,24 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpAuditService:
+    http_base: HttpBaseService
+
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        # Map parameters to backend expected fields: event->kind, entity_id->entityId, service->actor, data->details
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": service,
+            "details": data,
+        }
+        await self.http_base.post("/api/audit/record", "audit-service", payload)
+
+    def summarize(self) -> dict[str, Any]:
+        return {"mode": "http", "status": "active"}
 
 
 @dataclass
@@ -152,6 +182,135 @@ class LocalMemoryService:
 
 
 @dataclass
+class HttpMemoryService:
+    http_base: HttpBaseService
+
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        payload = {
+            "workspaceId": workspace_id,
+            "content": text,
+            "tags": tags,
+            "type": memory_type,
+            "importance": importance,
+        }
+        await self.http_base.post("/api/memory/remember", "memory-service", payload)
+
+    def summarize(self, workspace_id: str) -> dict[str, Any]:
+        return {"workspace_id": workspace_id, "mode": "http", "status": "active"}
+
+
+@dataclass
+class HttpBrowserService:
+    http_base: HttpBaseService
+
+    async def navigate(self, mission_id: str, url: str) -> dict[str, Any]:
+        return await self.http_base.post(
+            "/api/browser/navigate",
+            "browser-service",
+            {"missionId": mission_id, "url": url},
+        )
+
+    async def capture(self, mission_id: str) -> str:
+        result = await self.http_base.post(
+            "/api/browser/capture",
+            "browser-service",
+            {"missionId": mission_id},
+        )
+        return result.get("screenshotPath", "")
+
+    async def extract(self, mission_id: str, selectors: list[str]) -> dict[str, Any]:
+        return await self.http_base.post(
+            "/api/browser/extract",
+            "browser-service",
+            {"missionId": mission_id, "selectors": selectors},
+        )
+
+
+@dataclass
+class HttpTerminalService:
+    http_base: HttpBaseService
+
+    async def run(self, mission_id: str, command: str, cwd: str | None = None) -> dict[str, Any]:
+        return await self.http_base.post(
+            "/api/terminal/run",
+            "terminal-service",
+            {"missionId": mission_id, "command": command, "cwd": cwd},
+        )
+
+
+@dataclass
+class HttpFileService:
+    http_base: HttpBaseService
+
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        payload = {
+            "toolId": "filesystem.workspace.context.update",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionTitle": mission_title,
+                "completedSteps": completed_steps,
+                "runningSteps": running_steps,
+                "pendingSteps": pending_steps,
+            },
+        }
+        await self.http_base.post("/api/tools/execute", "file-service", payload)
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        payload = {
+            "toolId": "filesystem.artifact.write",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionId": mission_id,
+                "filename": filename,
+                "content": content,
+            },
+        }
+        result = await self.http_base.post("/api/tools/execute", "file-service", payload)
+        return result.get("path", "")
+
+    def artifact_paths(self, mission_id: str) -> list[str]:
+        return []
+
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        payload = {
+            "missionId": mission_id,
+            "state": state,
+        }
+        await self.http_base.post("/api/mission/state/save", "agent-orchestrator", payload)
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        try:
+            result = await self.http_base.post(
+                "/api/mission/state/load",
+                "agent-orchestrator",
+                {"missionId": mission_id},
+            )
+            return result.get("state")
+        except Exception:
+            return None
+
+
+@dataclass
 class LocalFileService:
     output_root: str
     context_history: list[dict[str, Any]] = field(default_factory=list)
@@ -213,6 +372,44 @@ class LocalFileService:
         return json.loads(path.read_text(encoding="utf-8"))
 
 
+class HttpBaseService:
+    def __init__(self, base_url: str, token: str):
+        self.base_url = base_url.rstrip("/")
+        self.token = token
+
+    def _get_headers(self, service_name: str, auth_context: dict | None = None) -> dict[str, str]:
+        headers = {
+            "x-jeanbot-internal-service": service_name,
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+        if auth_context:
+            auth_json = json.dumps(auth_context)
+            headers["x-jeanbot-auth-context"] = base64.b64encode(auth_json.encode()).decode()
+        return headers
+
+    async def post(
+        self,
+        path: str,
+        service_name: str,
+        payload: dict[str, Any],
+        auth_context: dict | None = None,
+        timeout: float = 30.0,
+    ) -> dict[str, Any]:
+        if httpx is None:
+            raise RuntimeError(
+                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
+            )
+
+        url = f"{self.base_url}/{path.lstrip('/')}"
+        headers = self._get_headers(service_name, auth_context)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.post(url, headers=headers, json=payload)
+            response.raise_for_status()
+            return response.json()
+
+
 @dataclass
 class StaticPolicyService:
     approval_required: bool = False
@@ -234,12 +431,10 @@ class StaticPolicyService:
 
 @dataclass
 class HttpRuntimeService:
-    base_url: str = field(
-        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
-    )
-    token: str = field(
-        default_factory=lambda: os.environ.get(
-            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
+    http_base: HttpBaseService = field(
+        default_factory=lambda: HttpBaseService(
+            base_url=os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084"),
+            token=os.environ.get("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"),
         )
     )
 
@@ -266,20 +461,12 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
-        if httpx is None:
-            raise RuntimeError(
-                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
-            )
-        url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
-        headers = {
-            "x-jeanbot-internal-service": "agent-orchestrator",
-            "x-jeanbot-internal-token": self.token,
-            "content-type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, headers=headers, json=request)
-            response.raise_for_status()
-            return response.json()
+        return await self.http_base.post(
+            "/internal/runtime/execute",
+            "agent-orchestrator",
+            request,
+            timeout=300.0,
+        )
 
 
 @dataclass
@@ -330,6 +517,24 @@ class DeterministicRuntimeService:
 @dataclass
 class HttpSubAgentService:
     runtime: HttpRuntimeService
+    capability_map: dict[str, str] = field(
+        default_factory=lambda: {
+            "research": "strategist",
+            "software-development": "engineer",
+            "verification": "analyst",
+            "browser": "browser-operator",
+            "terminal": "terminal-operator",
+        }
+    )
+    capability_tools: dict[str, list[str]] = field(
+        default_factory=lambda: {
+            "research": ["filesystem.read", "web.search"],
+            "software-development": ["filesystem.read", "filesystem.write", "terminal.command.run"],
+            "verification": ["filesystem.read", "terminal.command.run"],
+            "browser": ["browser.navigate", "browser.capture", "browser.extract"],
+            "terminal": ["terminal.command.run", "filesystem.read"],
+        }
+    )
 
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
         templates: list[SubAgentTemplate] = []
@@ -338,13 +543,15 @@ class HttpSubAgentService:
             if step.capability in seen:
                 continue
             seen.add(step.capability)
+            role = self.capability_map.get(step.capability, f"{step.capability}-operator")
+            tool_ids = self.capability_tools.get(step.capability)
             templates.append(
                 SubAgentTemplate(
                     specialization=step.capability,
-                    role=step.assignee or f"{step.capability}-operator",
+                    role=step.assignee or role,
                     provider="anthropic",
                     model="claude-sonnet-4-6",
-                    tool_ids=None,
+                    tool_ids=tool_ids,
                     max_parallel_tasks=1,
                     instructions=f"Complete step '{step.title}': {step.description}",
                 )

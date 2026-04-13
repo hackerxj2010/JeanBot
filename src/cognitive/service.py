@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,8 +10,14 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpBaseService,
+    HttpBrowserService,
+    HttpFileService,
+    HttpMemoryService,
     HttpRuntimeService,
     HttpSubAgentService,
+    HttpTerminalService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -20,7 +27,12 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AgentRuntimeService,
+    AuditService,
+    BrowserService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -28,8 +40,11 @@ from .executor import (
     MissionRecord,
     MissionRunResult,
     MissionStep,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
+    TerminalService,
 )
 
 
@@ -38,12 +53,14 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: AgentRuntimeService
+    subagent_service: SubAgentService
+    policy_service: PolicyService
+    browser_service: BrowserService | None = None
+    terminal_service: TerminalService | None = None
 
 
 @dataclass
@@ -56,6 +73,14 @@ class MissionExecutorService:
     capability_risk: dict[str, str] = field(default_factory=dict)
     failure_policy: dict[str, int] = field(default_factory=dict)
     mode: str = "local"
+    api_url: str = field(
+        default_factory=lambda: os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
+    )
+    token: str = field(
+        default_factory=lambda: os.environ.get(
+            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
+        )
+    )
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
@@ -90,8 +115,17 @@ class MissionExecutorService:
         execution_mode = mission_payload.get("mode", self.mode)
 
         if execution_mode == "live":
-            runtime_service = HttpRuntimeService()
+            http_base = HttpBaseService(
+                base_url=mission_payload.get("api_url", self.api_url),
+                token=mission_payload.get("token", self.token),
+            )
+            runtime_service = HttpRuntimeService(http_base=http_base)
             subagent_service = HttpSubAgentService(runtime=runtime_service)
+            audit_service = HttpAuditService(http_base=http_base)
+            memory_service = HttpMemoryService(http_base=http_base)
+            file_service = HttpFileService(http_base=http_base)
+            browser_service = HttpBrowserService(http_base=http_base)
+            terminal_service = HttpTerminalService(http_base=http_base)
         else:
             runtime_service = DeterministicRuntimeService(
                 provider=mission_payload.get("provider", self.provider),
@@ -100,6 +134,12 @@ class MissionExecutorService:
             subagent_service = DeterministicSubAgentService(
                 failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
             )
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
+            browser_service = None
+            terminal_service = None
+
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
@@ -112,6 +152,8 @@ class MissionExecutorService:
             sub_agent_service=subagent_service,
             file_service=file_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
         return MissionExecutionBundle(
             record=record,
@@ -123,10 +165,18 @@ class MissionExecutorService:
             runtime_service=runtime_service,
             subagent_service=subagent_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
+        # Handle mission resumption if only ID is provided
+        if not mission_payload.get("objective") and mission_payload.get("id"):
+            state = await bundle.file_service.load_mission_state(mission_payload["id"])
+            if state:
+                bundle.record = MissionRecord.from_dict(state)
+
         result = await bundle.executor.execute(bundle.record, bundle.context)
         self._persist_run_summary(bundle, result)
         return result
