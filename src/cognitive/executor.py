@@ -218,6 +218,15 @@ class PolicyService(Protocol):
     def evaluate_mission(self, mission_data: dict) -> PolicyDecision: ...
 
 
+class BrowserService(Protocol):
+    async def navigate(self, url: str) -> dict[str, Any]: ...
+    async def capture(self, selector: str | None = None) -> str: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, command: str) -> dict[str, Any]: ...
+
+
 class SubAgentService(Protocol):
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]: ...
     async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
@@ -467,6 +476,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -474,6 +485,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 
@@ -1149,15 +1162,15 @@ class MissionExecutor:
         existing_state = await self.file_service.load_mission_state(record.objective.id)
         if existing_state:
             print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.plan_version = existing_state.get("plan_version")
 
-        started_at = utc_now_iso()
-        outputs: dict[str, Any] = {}
-        memory_updates: list[str] = []
-        step_reports: list[StepExecutionRecord] = []
-        artifacts: list[MissionArtifact] = []
+        started_at = record.active_execution.started_at if record.active_execution else utc_now_iso()
+        outputs: dict[str, Any] = dict(record.active_execution.outputs) if record.active_execution else {}
+        memory_updates: list[str] = list(record.active_execution.memory_updates) if record.active_execution else []
+        step_reports: list[StepExecutionRecord] = list(record.active_execution.step_reports) if record.active_execution else []
+        artifacts: list[MissionArtifact] = list(record.active_execution.artifacts) if record.active_execution else []
         
         plan = self._require_plan(record)
         remaining_steps = {step.id for step in plan.steps}

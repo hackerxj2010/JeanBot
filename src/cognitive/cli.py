@@ -4,6 +4,7 @@ import argparse
 import asyncio
 import json
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Sequence
 
@@ -48,7 +49,59 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    title = None
+    mission_id_file = Path(args.workspace_root) / ".jeanbot" / "shell-mission-id.txt"
+    if mission_id_file.exists():
+        mission_id = mission_id_file.read_text(encoding="utf-8").strip()
+        print(f"Resuming session: {mission_id}")
+    else:
+        mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+        mission_id_file.parent.mkdir(parents=True, exist_ok=True)
+        mission_id_file.write_text(mission_id, encoding="utf-8")
+
+    last_run_file = Path(args.workspace_root) / ".jeanbot" / "shell-last-run.json"
+    if last_run_file.exists():
+        try:
+            from .executor import (
+                MissionArtifact,
+                MissionRunResult,
+                StepExecutionDiagnostics,
+                StepExecutionRecord,
+            )
+
+            data = json.loads(last_run_file.read_text(encoding="utf-8"))
+            reports = [
+                StepExecutionRecord(
+                    step_id=r["step_id"],
+                    started_at=r["started_at"],
+                    attempts=r["attempts"],
+                    summary=r["summary"],
+                    diagnostics=StepExecutionDiagnostics(**r["diagnostics"])
+                    if r.get("diagnostics")
+                    else None,
+                )
+                for r in data.get("step_reports", [])
+            ]
+            artifacts = [MissionArtifact(**a) for a in data.get("artifacts", [])]
+            last_result = MissionRunResult(
+                mission_id=data["mission_id"],
+                status=data["status"],
+                execution_mode=data["execution_mode"],
+                verification_summary=data["verification_summary"],
+                outputs=data["outputs"],
+                memory_updates=data["memory_updates"],
+                step_reports=reports,
+                artifacts=artifacts,
+                metrics=data["metrics"],
+                gaps=data["gaps"],
+                decision_log=data["decision_log"],
+                started_at=data["started_at"],
+                finished_at=data["finished_at"],
+            )
+            print(f"Loaded previous result: {last_result.verification_summary}")
+            title = data.get("title", f"Mission: {data['mission_id']}")
+        except Exception as e:
+            print(f"Could not load previous result: {e}")
     history: list[str] = []
 
     while True:
@@ -65,6 +118,9 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show current mission status")
+                print("  artifacts         List mission artifacts")
+                print("  show <id>         Show artifact content")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
@@ -73,6 +129,41 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() == "history":
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                continue
+
+            if line.lower() == "status":
+                if not last_result:
+                    print("No active mission.")
+                else:
+                    print(f"Mission: {title}")
+                    print(f"Status: {last_result.status}")
+                    print(f"Summary: {last_result.verification_summary}")
+                    print(f"Steps: {len(last_result.step_reports)}")
+                continue
+
+            if line.lower() == "artifacts":
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts found.")
+                else:
+                    print(f"Artifacts for {mission_id}:")
+                    for a in last_result.artifacts:
+                        print(f"  [{a.id[:8]}] {a.kind:10} {a.title}")
+                continue
+
+            if line.lower().startswith("show "):
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts to show.")
+                    continue
+                art_id = line[5:].strip()
+                target = next((a for a in last_result.artifacts if a.id.startswith(art_id)), None)
+                if not target:
+                    print(f"Artifact {art_id} not found.")
+                else:
+                    print(f"--- {target.title} ({target.path}) ---")
+                    try:
+                        print(Path(target.path).read_text(encoding="utf-8"))
+                    except Exception as e:
+                        print(f"Error reading artifact: {e}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -99,6 +190,20 @@ async def run_shell(args: argparse.Namespace):
 
             print(f"Executing: {title}")
             last_result = await service.execute_payload(payload)
+
+            # Persist last result for session resumption
+            try:
+                from .adapters import asdict_fallback
+
+                state = asdict(last_result)
+                state["title"] = title
+
+                last_run_file.write_text(
+                    json.dumps(state, default=asdict_fallback, indent=2),
+                    encoding="utf-8",
+                )
+            except Exception as e:
+                print(f"Warning: could not persist shell state: {e}")
 
             print(f"\nStatus: {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")
