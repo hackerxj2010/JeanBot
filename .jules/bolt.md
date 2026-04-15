@@ -1,0 +1,3 @@
+## 2026-04-15 - [Correctness vs. Speed in Vector Math]
+**Learning:** Optimizing `cosineSimilarity` to a simple dot product requires guaranteed normalized inputs. In a shared utility package like `@jeanbot/ai`, making such assumptions can lead to silent mathematical errors for other callers who might pass raw vectors. Speed should not come at the expense of correctness in general-purpose utilities.
+**Action:** Always maintain full mathematical correctness in public utilities. If a performance-critical path exists where inputs are known to be normalized, provide a separate, clearly named function (e.g., `dotProductSimilarity`) or verify the assumption.

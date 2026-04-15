@@ -28,7 +28,8 @@ const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS
     length: dimensions
   }, (_, index) => {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
+    // Optimized: Math.round is significantly faster than Number.toFixed
+    return Math.round(centered * 1e8) / 1e8;
   });
   return normalizeVector(values);
 };
@@ -43,7 +44,8 @@ const normalizeVector = (values: number[]) => {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  // Optimized: Math.round is significantly faster than Number.toFixed
+  return values.map((value) => Math.round((value / magnitude) * 1e8) / 1e8);
 };
 
 const toEmbeddingVectorRecord = (
@@ -51,14 +53,19 @@ const toEmbeddingVectorRecord = (
   values: number[],
   provider: EmbeddingProvider,
   model: string
-): EmbeddingVectorRecord => ({
-  values: normalizeVector(values),
-  dimensions: values.length,
-  provider,
-  model,
-  generatedAt: new Date().toISOString(),
-  contentHash: contentHashFor(text)
-});
+): EmbeddingVectorRecord => {
+  // We assume values from OpenAI are already normalized or we normalize them here.
+  // Using pre-normalized vectors avoids redundant calculations in cosineSimilarity.
+  const normalized = normalizeVector(values);
+  return {
+    values: normalized,
+    dimensions: values.length,
+    provider,
+    model,
+    generatedAt: new Date().toISOString(),
+    contentHash: contentHashFor(text)
+  };
+};
 
 const sleep = (timeMs: number) =>
   new Promise<void>((resolve) => {
