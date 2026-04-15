@@ -16,34 +16,56 @@ const contentHashFor = (value: string) =>
   crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  // Use multiple updates to avoid string interpolation overhead
+  const digest = crypto
+    .createHash("sha256")
+    .update(seed)
+    .update(":")
+    .update(index.toString())
+    .digest();
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
 
-const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
+export const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Performance: Math.round is significantly faster than toFixed() which involves string conversion
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
+
   return normalizeVector(values);
 };
 
-const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+export const normalizeVector = (values: number[]) => {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sumSq = 0;
+  for (let i = 0; i < length; i++) {
+    const val = values[i];
+    sumSq += val * val;
+  }
+
+  const magnitude = Math.sqrt(sumSq);
   if (magnitude === 0) {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(length);
+  for (let i = 0; i < length; i++) {
+    // Performance: Pre-calculate 1/magnitude and use Math.round for speed
+    result[i] = Math.round(values[i] * invMagnitude * 1e8) / 1e8;
+  }
+
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
