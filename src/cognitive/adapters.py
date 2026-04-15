@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -10,7 +11,7 @@ from typing import Any
 
 try:
     import httpx
-except ModuleNotFoundError:  # pragma: no cover - handled at runtime when live mode is used
+except ModuleNotFoundError:  # pragma: no cover
     httpx = None
 
 from .executor import (
@@ -39,6 +40,21 @@ def stable_hash(value: str) -> str:
 
 def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
+
+
+def asdict_fallback(obj: Any) -> Any:
+    if hasattr(obj, "__dataclass_fields__"):
+        res = {}
+        for field_name in obj.__dataclass_fields__:
+            res[field_name] = asdict_fallback(getattr(obj, field_name))
+        return res
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, (list, tuple, set)):
+        return [asdict_fallback(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    return obj
 
 
 @dataclass
@@ -233,9 +249,9 @@ class StaticPolicyService:
 
 
 @dataclass
-class HttpRuntimeService:
-    base_url: str = field(
-        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
+class HttpBaseService:
+    api_url: str = field(
+        default_factory=lambda: os.environ.get("JEANBOT_API_URL", "http://localhost:8080")
     )
     token: str = field(
         default_factory=lambda: os.environ.get(
@@ -243,6 +259,46 @@ class HttpRuntimeService:
         )
     )
 
+    def __post_init__(self):
+        self.api_url = self.api_url.rstrip("/")
+
+    def _headers(
+        self, service_name: str = "agent-orchestrator", auth_context: dict | None = None
+    ) -> dict[str, str]:
+        headers = {
+            "x-jeanbot-internal-service": service_name,
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+        if auth_context:
+            auth_json = json.dumps(asdict_fallback(auth_context))
+            headers["x-jeanbot-auth-context"] = base64.b64encode(auth_json.encode("utf-8")).decode(
+                "utf-8"
+            )
+        return headers
+
+    async def _post(
+        self,
+        path: str,
+        data: dict,
+        service_name: str = "agent-orchestrator",
+        auth_context: dict | None = None,
+    ) -> dict[str, Any]:
+        if httpx is None:
+            raise RuntimeError(
+                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
+            )
+        url = f"{self.api_url}{path}"
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                url, headers=self._headers(service_name, auth_context), json=asdict_fallback(data)
+            )
+            response.raise_for_status()
+            return response.json()
+
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
     def prepare_frame(
         self,
         objective: MissionObjective,
@@ -266,20 +322,123 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
-        if httpx is None:
-            raise RuntimeError(
-                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
-            )
-        url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
-        headers = {
-            "x-jeanbot-internal-service": "agent-orchestrator",
-            "x-jeanbot-internal-token": self.token,
-            "content-type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, headers=headers, json=request)
-            response.raise_for_status()
-            return response.json()
+        return await self._post("/internal/runtime/execute", request)
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        await self._post(
+            "/api/audit/record",
+            {"kind": event, "entityId": entity_id, "actor": service, "details": data},
+        )
+
+
+@dataclass
+class HttpMemoryService(HttpBaseService):
+    async def remember(
+        self,
+        workspace_id: str,
+        text: str,
+        tags: list[str],
+        memory_type: str,
+        importance: float,
+    ):
+        await self._post(
+            "/api/memory/remember",
+            {
+                "workspaceId": workspace_id,
+                "text": text,
+                "tags": tags,
+                "type": memory_type,
+                "importance": importance,
+            },
+        )
+
+
+@dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        await self._post(
+            "/api/tools/execute",
+            {
+                "toolId": "filesystem.workspace.context.update",
+                "params": {
+                    "workspaceRoot": workspace_root,
+                    "missionTitle": mission_title,
+                    "completedSteps": completed_steps,
+                    "runningSteps": running_steps,
+                    "pendingSteps": pending_steps,
+                },
+            },
+        )
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        res = await self._post(
+            "/api/tools/execute",
+            {
+                "toolId": "filesystem.artifact.write",
+                "params": {
+                    "workspaceRoot": workspace_root,
+                    "missionId": mission_id,
+                    "filename": filename,
+                    "content": content,
+                },
+            },
+        )
+        return str(res.get("path", ""))
+
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        await self._post(
+            "/api/tools/execute",
+            {
+                "toolId": "filesystem.state.save",
+                "params": {"missionId": mission_id, "state": state},
+            },
+        )
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        res = await self._post(
+            "/api/tools/execute",
+            {"toolId": "filesystem.state.load", "params": {"missionId": mission_id}},
+        )
+        return res.get("state")
+
+
+@dataclass
+class HttpBrowserService(HttpBaseService):
+    async def navigate(self, workspace_id: str, url: str, session_id: str | None = None) -> dict:
+        return await self._post(
+            "/api/browser/navigate",
+            {"workspaceId": workspace_id, "url": url, "sessionId": session_id},
+        )
+
+    async def capture(self, workspace_id: str, session_id: str) -> dict:
+        return await self._post(
+            "/api/browser/capture", {"workspaceId": workspace_id, "sessionId": session_id}
+        )
+
+
+@dataclass
+class HttpTerminalService(HttpBaseService):
+    async def run(self, workspace_id: str, command: str, session_id: str | None = None) -> dict:
+        return await self._post(
+            "/api/terminal/run",
+            {"workspaceId": workspace_id, "command": command, "sessionId": session_id},
+        )
 
 
 @dataclass
@@ -332,19 +491,34 @@ class HttpSubAgentService:
     runtime: HttpRuntimeService
 
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
+        capability_map = {
+            "research": {"role": "strategist", "tools": ["web_search", "browser_extract"]},
+            "software-development": {
+                "role": "developer",
+                "tools": ["terminal_exec", "read_file", "write_file"],
+            },
+            "terminal": {"role": "terminal-operator", "tools": ["terminal_exec"]},
+            "browser": {
+                "role": "browser-operator",
+                "tools": ["browser_navigate", "browser_extract"],
+            },
+        }
         templates: list[SubAgentTemplate] = []
         seen: set[str] = set()
         for step in plan.steps:
             if step.capability in seen:
                 continue
             seen.add(step.capability)
+            mapping = capability_map.get(
+                step.capability, {"role": f"{step.capability}-operator", "tools": None}
+            )
             templates.append(
                 SubAgentTemplate(
                     specialization=step.capability,
-                    role=step.assignee or f"{step.capability}-operator",
+                    role=step.assignee or mapping["role"],
                     provider="anthropic",
                     model="claude-sonnet-4-6",
-                    tool_ids=None,
+                    tool_ids=mapping["tools"],
                     max_parallel_tasks=1,
                     instructions=f"Complete step '{step.title}': {step.description}",
                 )
@@ -359,6 +533,7 @@ class HttpSubAgentService:
         template: SubAgentTemplate = params["template"]
         context: ExecutionContext = params["context"]
         attempt: int = params.get("attempt", 1)
+        failure_policy = params.get("failure_policy")
 
         request = {
             "objective": {
@@ -410,6 +585,7 @@ class HttpSubAgentService:
                 "maxParallelism": context.max_parallelism,
             },
             "providerMode": "live",
+            "failurePolicy": failure_policy,
         }
 
         raw_result = await self.runtime.execute_task(request)
@@ -418,7 +594,9 @@ class HttpSubAgentService:
         # expected by the Python executor.
         final_text = raw_result.get("finalText", "")
         tool_calls = raw_result.get("toolCalls", [])
-        verification = raw_result.get("verification", {"ok": True, "reason": "Completed by runtime."})
+        verification = raw_result.get(
+            "verification", {"ok": True, "reason": "Completed by runtime."}
+        )
 
         diagnostics = StepExecutionDiagnostics(
             overall_score=0.9 if verification.get("ok") else 0.4,

@@ -20,6 +20,9 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser = subparsers.add_parser("execute", help="Execute a mission payload")
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    execute_parser.add_argument("--mode", choices=["local", "live"], help="Override execution mode")
+    execute_parser.add_argument("--api-url", help="Override API URL")
+    execute_parser.add_argument("--token", help="Override internal token")
 
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
@@ -27,11 +30,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     finalize_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     finalize_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    finalize_parser.add_argument("--mode", choices=["local", "live"], help="Override execution mode")
+    finalize_parser.add_argument("--api-url", help="Override API URL")
+    finalize_parser.add_argument("--token", help="Override internal token")
 
     shell_parser = subparsers.add_parser("shell", help="Start interactive mission shell")
     shell_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
     shell_parser.add_argument("--workspace-id", default="workspace-interactive", help="Workspace ID")
-    shell_parser.add_argument("--mode", choices=["local", "live"], default="local", help="Execution mode")
+    shell_parser.add_argument(
+        "--mode", choices=["local", "live"], default="local", help="Execution mode"
+    )
 
     return parser
 
@@ -48,7 +56,27 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    last_run_payload = None
+
+    # Try to resume mission if shell-mission-id.txt exists
+    jeanbot_dir = Path(args.workspace_root) / ".jeanbot"
+    jeanbot_dir.mkdir(parents=True, exist_ok=True)
+    mission_id_file = jeanbot_dir / "shell-mission-id.txt"
+    last_run_file = jeanbot_dir / "shell-last-run.json"
+
+    if mission_id_file.exists():
+        mission_id = mission_id_file.read_text().strip()
+        print(f"Resuming session: {mission_id}")
+    else:
+        mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+        mission_id_file.write_text(mission_id)
+
+    if last_run_file.exists():
+        try:
+            last_run_payload = json.loads(last_run_file.read_text())
+        except Exception:
+            pass
+
     history: list[str] = []
 
     while True:
@@ -65,9 +93,12 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show current mission status")
+                print("  artifacts         List mission artifacts")
+                print("  show <id>         Show artifact content")
+                print("  refine <feedback> Refine the last mission result with feedback")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
                 continue
 
             if line.lower() == "history":
@@ -75,29 +106,66 @@ async def run_shell(args: argparse.Namespace):
                     print(f"  {i:3}  {cmd}")
                 continue
 
-            if line.lower().startswith("refine "):
+            if line.lower() == "status":
                 if not last_result:
+                    print("No active mission.")
+                else:
+                    print(f"Mission: {last_result.mission_id}")
+                    print(f"Status: {last_result.status}")
+                    print(f"Verification: {last_result.verification_summary}")
+                    print(f"Steps: {len(last_result.step_reports)}")
+                continue
+
+            if line.lower() == "artifacts":
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts available.")
+                else:
+                    for artifact in last_result.artifacts:
+                        print(f"  [{artifact.id[:8]}] {artifact.title}: {artifact.path}")
+                continue
+
+            if line.lower().startswith("show "):
+                if not last_result:
+                    print("No artifacts available.")
+                    continue
+                art_id = line[5:].strip()
+                match = next(
+                    (a for a in last_result.artifacts if a.id.startswith(art_id)),
+                    None,
+                )
+                if match:
+                    content = Path(match.path).read_text(encoding="utf-8")
+                    print(f"\n--- {match.title} ---\n")
+                    print(content)
+                else:
+                    print(f"Artifact {art_id} not found.")
+                continue
+
+            if line.lower().startswith("refine "):
+                if not last_run_payload:
                     print("Nothing to refine. Run a mission first.")
                     continue
                 feedback = line[7:].strip()
                 objective = (
                     f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
+                    f"Previous summary: {last_result.verification_summary if last_result else 'N/A'}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
+                payload = {**last_run_payload, "title": title, "objective": objective}
             else:
                 objective = line
                 title = f"Mission: {line[:30]}..."
-
-            payload = {
-                "mission_id": mission_id,
-                "workspace_id": args.workspace_id,
-                "title": title,
-                "objective": objective,
-                "mode": args.mode,
-            }
+                payload = {
+                    "mission_id": mission_id,
+                    "workspace_id": args.workspace_id,
+                    "title": title,
+                    "objective": objective,
+                    "mode": args.mode,
+                }
 
             print(f"Executing: {title}")
+            last_run_payload = payload
+            last_run_file.write_text(json.dumps(payload))
             last_result = await service.execute_payload(payload)
 
             print(f"\nStatus: {last_result.status}")
@@ -105,7 +173,7 @@ async def run_shell(args: argparse.Namespace):
             if last_result.artifacts:
                 print(f"Artifacts: {len(last_result.artifacts)}")
                 for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+                    print(f"  - {artifact.title} ([{artifact.id[:8]}])")
 
         except KeyboardInterrupt:
             print("\nInterrupt received, type 'exit' to quit.")
@@ -124,7 +192,16 @@ async def run_command(args: argparse.Namespace) -> dict:
         return {"command": "shell", "status": "exited"}
 
     service = MissionExecutorService(workspace_root=args.workspace_root)
+    if hasattr(args, "mode") and args.mode:
+        service.mode = args.mode
+
     payload = service.load_payload(args.mission_file)
+
+    if hasattr(args, "api_url") and args.api_url:
+        payload["api_url"] = args.api_url
+    if hasattr(args, "token") and args.token:
+        payload["token"] = args.token
+
     if args.command == "execute":
         result = await service.execute_payload(payload)
     elif args.command == "finalize-distributed":

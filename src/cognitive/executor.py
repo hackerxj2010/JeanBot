@@ -223,6 +223,15 @@ class SubAgentService(Protocol):
     async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
 
 
+class BrowserService(Protocol):
+    async def navigate(self, workspace_id: str, url: str, session_id: str | None = None) -> dict: ...
+    async def capture(self, workspace_id: str, session_id: str) -> dict: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, workspace_id: str, command: str, session_id: str | None = None) -> dict: ...
+
+
 class MissionExecutionIntelligence:
     def assess_step(
         self,
@@ -467,6 +476,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -474,6 +485,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 
@@ -1150,8 +1163,16 @@ class MissionExecutor:
         if existing_state:
             print(f"Resuming mission {record.objective.id} from persisted state.")
             # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.plan_version = existing_state.get("plan_version", 1)
+
+            # Update step statuses from saved state if needed
+            saved_steps = existing_state.get("steps", [])
+            if saved_steps and record.plan:
+                for step, saved in zip(record.plan.steps, saved_steps):
+                    if saved.get("status") == "completed":
+                        step.status = "completed"
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
