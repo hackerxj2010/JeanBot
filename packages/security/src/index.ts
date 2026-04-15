@@ -32,9 +32,14 @@ export const riskFromText = (text: string): RiskLevel => {
 
 export const redactSecrets = (input: string) => {
   return input
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
+    .replace(/\bsk-ant-[A-Za-z0-9_-]+/g, "[REDACTED_ANTHROPIC_KEY]")
+    .replace(/\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9_-]+/g, "[REDACTED_STRIPE_KEY]")
+    .replace(/\bsk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bAIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/\b(?:gh[pousr]_|github_pat_)[A-Za-z0-9_]+/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/\bjean_(?:access|refresh)_[A-Za-z0-9_-]+/g, "[REDACTED_JEANBOT_SESSION_TOKEN]")
+    .replace(/\bjean_[A-Za-z0-9_-]+/g, "[REDACTED_JEANBOT_KEY]")
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
 };
 
 export const ensureLeastPrivilege = (
