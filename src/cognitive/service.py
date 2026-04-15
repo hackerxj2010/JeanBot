@@ -9,8 +9,13 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpBrowserService,
+    HttpFileService,
+    HttpMemoryService,
     HttpRuntimeService,
     HttpSubAgentService,
+    HttpTerminalService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -38,12 +43,14 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: Any
+    memory_service: Any
+    file_service: Any
+    runtime_service: Any
+    subagent_service: Any
+    policy_service: Any
+    browser_service: Any | None = None
+    terminal_service: Any | None = None
 
 
 @dataclass
@@ -83,16 +90,21 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
 
         execution_mode = mission_payload.get("mode", self.mode)
 
         if execution_mode == "live":
+            audit_service = HttpAuditService()
+            memory_service = HttpMemoryService()
+            file_service = HttpFileService()
             runtime_service = HttpRuntimeService()
             subagent_service = HttpSubAgentService(runtime=runtime_service)
+            browser_service = HttpBrowserService()
+            terminal_service = HttpTerminalService()
         else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
             runtime_service = DeterministicRuntimeService(
                 provider=mission_payload.get("provider", self.provider),
                 model=mission_payload.get("model", self.model),
@@ -100,6 +112,8 @@ class MissionExecutorService:
             subagent_service = DeterministicSubAgentService(
                 failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
             )
+            browser_service = None
+            terminal_service = None
         policy_service = StaticPolicyService(
             approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
             default_risk=mission_payload.get("risk", "low"),
@@ -112,6 +126,8 @@ class MissionExecutorService:
             sub_agent_service=subagent_service,
             file_service=file_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
         return MissionExecutionBundle(
             record=record,
@@ -123,6 +139,8 @@ class MissionExecutorService:
             runtime_service=runtime_service,
             subagent_service=subagent_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
