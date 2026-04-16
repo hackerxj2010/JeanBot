@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Protocol
 
@@ -1147,20 +1147,51 @@ class MissionExecutor:
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
         existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
-            print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
-        
+
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            record.decision_log.extend(existing_state.get("decision_log", []))
+            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.plan_version = existing_state.get("plan_version", record.plan_version)
+
+            # Restore step statuses from persisted plan
+            persisted_plan = existing_state.get("plan")
+            if persisted_plan and record.plan:
+                persisted_steps = {s["id"]: s for s in persisted_plan.get("steps", [])}
+                for step in record.plan.steps:
+                    if step.id in persisted_steps:
+                        step.status = persisted_steps[step.id].get("status", step.status)
+
+            # Restore active execution context
+            active = existing_state.get("active_execution")
+            if active:
+                started_at = active.get("started_at", started_at)
+                outputs.update(active.get("outputs", {}))
+                memory_updates.extend(active.get("memory_updates", []))
+                artifacts.extend([
+                    MissionArtifact(**art) if isinstance(art, dict) else art
+                    for art in active.get("artifacts", [])
+                ])
+                step_reports.extend([
+                    StepExecutionRecord(
+                        step_id=r["step_id"],
+                        started_at=r["started_at"],
+                        attempts=r["attempts"],
+                        summary=r["summary"],
+                        diagnostics=StepExecutionDiagnostics(**r["diagnostics"]) if r.get("diagnostics") else None
+                    ) if isinstance(r, dict) else r
+                    for r in active.get("step_reports", [])
+                ])
+
         plan = self._require_plan(record)
-        remaining_steps = {step.id for step in plan.steps}
+        remaining_steps: set[str] = set()
+        self._sync_remaining_steps(record, remaining_steps)
         
         while remaining_steps:
             active_plan = self._require_plan(record)
@@ -1243,6 +1274,14 @@ class MissionExecutor:
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "plan": asdict(record.plan) if record.plan else None,
+                "active_execution": {
+                    "started_at": started_at,
+                    "outputs": outputs,
+                    "memory_updates": memory_updates,
+                    "step_reports": [asdict(r) for r in step_reports],
+                    "artifacts": [asdict(a) for a in artifacts],
+                }
             })
 
             await self.audit_service.record(
