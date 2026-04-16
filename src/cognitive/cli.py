@@ -48,8 +48,17 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
+
+    mission_id_file = Path(args.workspace_root) / ".jeanbot" / "shell-mission-id.txt"
+    if mission_id_file.exists():
+        mission_id = mission_id_file.read_text(encoding="utf-8").strip()
+        print(f"Resuming mission: {mission_id}")
+    else:
+        mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+        ensure_dir = Path(args.workspace_root) / ".jeanbot"
+        ensure_dir.mkdir(parents=True, exist_ok=True)
+        mission_id_file.write_text(mission_id, encoding="utf-8")
 
     while True:
         try:
@@ -65,6 +74,9 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show current mission status")
+                print("  artifacts         List mission artifacts")
+                print("  show <id>         Display content of an artifact")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
@@ -73,6 +85,48 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() == "history":
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                continue
+
+            if line.lower() == "status":
+                summary_data = service.get_mission_run_summary(mission_id)
+                if summary_data:
+                    res = summary_data.get("result", {})
+                    print(f"Status: {res.get('status')}")
+                    print(f"Summary: {res.get('verification_summary')}")
+                    reports = res.get("step_reports", [])
+                    completed = len([r for r in reports if r.get("diagnostics", {}).get("failure_class") == "none"])
+                    total = len(reports)
+                    print(f"Progress: {completed}/{total} steps completed.")
+                elif last_result:
+                    print(f"Status: {last_result.status}")
+                    print(f"Summary: {last_result.verification_summary}")
+                    completed = len([r for r in last_result.step_reports if r.diagnostics and r.diagnostics.failure_class == "none"])
+                    total = len(last_result.step_reports)
+                    print(f"Progress: {completed}/{total} steps completed.")
+                else:
+                    print(f"Active mission ID: {mission_id}. No execution results yet.")
+                continue
+
+            if line.lower() == "artifacts":
+                artifacts = service.get_mission_artifacts(mission_id)
+                if not artifacts:
+                    print("No artifacts found.")
+                else:
+                    print(f"Artifacts for {mission_id}:")
+                    for art in artifacts:
+                        print(f"  [{art['id'][:8]}] {art['title']} ({art['kind']})")
+                        print(f"    Path: {art['path']}")
+                continue
+
+            if line.lower().startswith("show "):
+                art_id = line[5:].strip()
+                try:
+                    content = service.get_artifact_content(mission_id, art_id)
+                    print(f"\n--- Artifact: {art_id} ---\n")
+                    print(content)
+                    print("\n--- End of Artifact ---\n")
+                except Exception as e:
+                    print(f"Error: {e}")
                 continue
 
             if line.lower().startswith("refine "):

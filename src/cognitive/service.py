@@ -365,3 +365,41 @@ class MissionExecutorService:
 
     def _mission_id(self) -> str:
         return f"py-mission-{uuid.uuid4().hex[:12]}"
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        run_json = mission_dir / "mission-run.json"
+        if not run_json.exists():
+            return None
+        try:
+            return json.loads(run_json.read_text(encoding="utf-8"))
+        except Exception:
+            return None
+
+    def get_mission_artifacts(self, mission_id: str) -> list[dict[str, Any]]:
+        summary = self.get_mission_run_summary(mission_id)
+        if not summary:
+            return []
+        return summary.get("result", {}).get("artifacts", [])
+
+    def get_artifact_content(self, mission_id: str, artifact_id_or_path: str) -> str:
+        # Try direct path first
+        path = Path(artifact_id_or_path)
+        if path.exists() and path.is_file():
+            return path.read_text(encoding="utf-8")
+
+        # Try relative to workspace root
+        rel_path = Path(self.workspace_root) / artifact_id_or_path
+        if rel_path.exists() and rel_path.is_file():
+            return rel_path.read_text(encoding="utf-8")
+
+        # Search by ID or short ID in mission artifacts
+        artifacts = self.get_mission_artifacts(mission_id)
+        for art in artifacts:
+            art_id = art.get("id", "")
+            if art_id == artifact_id_or_path or art_id.startswith(artifact_id_or_path):
+                art_path = Path(art["path"])
+                if art_path.exists():
+                    return art_path.read_text(encoding="utf-8")
+
+        raise FileNotFoundError(f"Artifact '{artifact_id_or_path}' not found for mission {mission_id}")
