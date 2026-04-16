@@ -109,7 +109,13 @@ export class TerminalService {
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\bwget\s+.*\s+\|\s+\b(ba)?sh\b/i,
+      /\bcurl\s+.*\s+\|\s+\b(ba)?sh\b/i,
+      /\bchmod\s+.*\s+\/etc\b/i,
+      /\bchown\s+.*\s+\/etc\b/i,
+      /\bcat\s+\/etc\/shadow\b/i,
+      /\bcat\s+\/etc\/passwd\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
