@@ -1,0 +1,3 @@
+## 2026-04-17 - [Optimizing Numerical Vector Operations]
+**Learning:** High-dimensional vector operations (e.g., 1536d) are highly sensitive to iteration overhead and string formatting. Using `Array.from` and `.toFixed()` in a hot loop can be up to 3x slower than manual `for` loops and `Math.round`. Additionally, modern Node.js `crypto.hash()` is significantly more efficient than the legacy `createHash()` stream-based API for one-off operations.
+**Action:** Prefer manual `for` loops over functional abstractions (`map`, `reduce`) for large arrays in performance-critical paths. Use `crypto.hash()` for single-shot hashing. Avoid `toFixed()` for simple numerical rounding.
