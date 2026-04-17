@@ -13,10 +13,10 @@ const MAX_RETRIES = 2;
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  crypto.hash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const digest = crypto.hash("sha256", `${seed}:${index}`, "buffer");
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +24,45 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+
+  // Pre-allocate array for better performance
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index += 1) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+
+    // Use Math.round for faster numerical rounding compared to .toFixed(8)
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  // Use manual for loop to avoid overhead of reduce/map in high-dimensional vectors
+  let sum = 0;
+  for (let index = 0; index < length; index += 1) {
+    const val = values[index] ?? 0;
+    sum += val * val;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sum);
+  if (magnitude === 0) {
+    return new Array(length).fill(0);
+  }
+
+  // Pre-allocate result array
+  const result = new Array(length);
+  for (let index = 0; index < length; index += 1) {
+    const val = values[index] ?? 0;
+
+    // Use Math.round for faster numerical rounding compared to .toFixed(8)
+    result[index] = Math.round((val / magnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
