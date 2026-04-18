@@ -1,0 +1,3 @@
+## 2026-04-18 - [Optimized Synthetic Vector Generation]
+**Learning:** High-frequency operations like vector generation and normalization are heavily penalized by high-level array methods (Map/Reduce/Array.from) and string-based formatting (toFixed). Single-shot hashing via `crypto.hash` in Node 22+ is significantly faster than the legacy `createHash` stream API.
+**Action:** Prefer `for` loops and pre-allocated arrays in hot paths. Use `crypto.hash` with `outputEncoding: "buffer"` for raw binary hash access in Node 22+. Replace `toFixed` with `Math.round(val * scale) / scale` for measurable speedups in numeric processing.
