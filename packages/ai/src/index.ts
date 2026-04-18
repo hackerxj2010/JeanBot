@@ -13,10 +13,10 @@ const MAX_RETRIES = 2;
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  crypto.hash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const digest = crypto.hash("sha256", `${seed}:${index}`, "buffer");
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +24,41 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index += 1) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sumSq = 0;
+  for (let index = 0; index < length; index += 1) {
+    const value = values[index];
+    sumSq += value * value;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sumSq);
+  if (magnitude === 0) {
+    const result = new Array(length);
+    for (let index = 0; index < length; index += 1) {
+      result[index] = 0;
+    }
+    return result;
+  }
+
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(length);
+  for (let index = 0; index < length; index += 1) {
+    result[index] = Math.round(values[index] * invMagnitude * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -219,16 +234,21 @@ export const generateEmbedding = async (
 };
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
-  if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const length = left.length;
+  if (length === 0 || length !== right.length) {
     return 0;
   }
 
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = left[index];
+    const rightValue = right[index];
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;
