@@ -180,7 +180,16 @@ class AgentRuntimeService(Protocol):
 
 
 class AuditService(Protocol):
-    async def record(self, event: str, entity_id: str, service: str, data: dict): ...
+    async def record(self, event: str, entity_id: str, service: str, data: dict) -> None: ...
+
+
+class BrowserService(Protocol):
+    async def navigate(self, url: str) -> dict[str, Any]: ...
+    async def capture(self) -> dict[str, Any]: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, command: str) -> dict[str, Any]: ...
 
 
 class MemoryService(Protocol):
@@ -467,6 +476,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -474,6 +485,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 
@@ -1153,6 +1166,11 @@ class MissionExecutor:
             record.decision_log.extend(existing_state.get("decision_log", []))
             record.replan_history.extend(existing_state.get("replan_history", []))
 
+        # Reconstruct outputs/reports from record plan status to allow skipping
+        # This is useful if we loaded from a partially completed MissionRecord.
+        # But for now executor logic relies on its internal loop state.
+        # We ensure steps already marked as completed are skipped in the main loop.
+
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
@@ -1174,8 +1192,26 @@ class MissionExecutor:
                     f'Mission "{record.objective.id}" cannot make progress because no steps are ready.'
                 )
             
+            # Skip any steps already marked as completed or skipped
+            ready_steps = [
+                s for s in ready_steps if s.status not in ("completed", "skipped", "running")
+            ]
+
+            if not ready_steps:
+                # Re-sync and check if all done
+                self._sync_remaining_steps(record, remaining_steps)
+                if not remaining_steps:
+                    break
+                # If still have remaining but none ready, it might be a stuck plan
+                # (handled by ValueError below)
+
             batch = self._select_batch(ready_steps, template_by_capability, context.max_parallelism)
-            
+
+            if not batch and remaining_steps:
+                raise ValueError(
+                    f'Mission "{record.objective.id}" cannot make progress because no steps are ready.'
+                )
+
             await self.audit_service.record(
                 "mission.batch.started",
                 record.objective.id,

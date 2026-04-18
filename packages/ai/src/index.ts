@@ -12,24 +12,30 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  if (typeof crypto.hash === "function") {
+    return crypto.hash("sha256", normalizeText(value), "hex");
+  }
+  return crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
+  if (typeof crypto.hash === "function") {
+    const digest = crypto.hash("sha256", `${seed}:${index}`, "buffer");
+    return digest.readUInt32BE(0) / 0xffffffff;
+  }
   const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
-  const int = digest.readUInt32BE(0);
-  return int / 0xffffffff;
+  return digest.readUInt32BE(0) / 0xffffffff;
 };
 
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index += 1) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -38,12 +44,21 @@ const normalizeVector = (values: number[]) => {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sumOfSquares = 0;
+  for (let index = 0; index < values.length; index += 1) {
+    sumOfSquares += values[index] * values[index];
+  }
+
+  const magnitude = Math.sqrt(sumOfSquares);
   if (magnitude === 0) {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const result = new Array(values.length);
+  for (let index = 0; index < values.length; index += 1) {
+    result[index] = Math.round((values[index] / magnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (

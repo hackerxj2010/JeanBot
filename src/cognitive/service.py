@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,8 +10,13 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpBrowserService,
+    HttpFileService,
+    HttpPolicyService,
     HttpRuntimeService,
     HttpSubAgentService,
+    HttpTerminalService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -20,7 +26,11 @@ from .adapters import (
 )
 from .executor import (
     ActiveExecutionState,
+    AuditService,
+    BrowserService,
     ExecutionContext,
+    FileService,
+    MemoryService,
     MissionArtifact,
     MissionExecutor,
     MissionObjective,
@@ -28,8 +38,11 @@ from .executor import (
     MissionRecord,
     MissionRunResult,
     MissionStep,
+    PolicyService,
     StepExecutionDiagnostics,
     StepExecutionRecord,
+    SubAgentService,
+    TerminalService,
 )
 
 
@@ -38,12 +51,14 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: AuditService
+    memory_service: MemoryService
+    file_service: FileService
+    runtime_service: Any
+    subagent_service: SubAgentService
+    policy_service: PolicyService
+    browser_service: BrowserService | None = None
+    terminal_service: TerminalService | None = None
 
 
 @dataclass
@@ -83,16 +98,23 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
 
         execution_mode = mission_payload.get("mode", self.mode)
+        api_url = mission_payload.get("api_url", os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8080"))
 
         if execution_mode == "live":
-            runtime_service = HttpRuntimeService()
+            audit_service = HttpAuditService(api_url=api_url)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = HttpFileService(api_url=api_url)
+            runtime_service = HttpRuntimeService(api_url=api_url)
             subagent_service = HttpSubAgentService(runtime=runtime_service)
+            policy_service = HttpPolicyService(api_url=api_url)
+            browser_service = HttpBrowserService(api_url=api_url)
+            terminal_service = HttpTerminalService(api_url=api_url)
         else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
             runtime_service = DeterministicRuntimeService(
                 provider=mission_payload.get("provider", self.provider),
                 model=mission_payload.get("model", self.model),
@@ -100,11 +122,14 @@ class MissionExecutorService:
             subagent_service = DeterministicSubAgentService(
                 failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
             )
-        policy_service = StaticPolicyService(
-            approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
-            default_risk=mission_payload.get("risk", "low"),
-            capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
-        )
+            policy_service = StaticPolicyService(
+                approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
+                default_risk=mission_payload.get("risk", "low"),
+                capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
+            )
+            browser_service = None
+            terminal_service = None
+
         executor = MissionExecutor(
             runtime=runtime_service,
             memory_service=memory_service,
@@ -112,6 +137,8 @@ class MissionExecutorService:
             sub_agent_service=subagent_service,
             file_service=file_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
         return MissionExecutionBundle(
             record=record,
@@ -123,6 +150,8 @@ class MissionExecutorService:
             runtime_service=runtime_service,
             subagent_service=subagent_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
@@ -130,6 +159,33 @@ class MissionExecutorService:
         result = await bundle.executor.execute(bundle.record, bundle.context)
         self._persist_run_summary(bundle, result)
         return result
+
+    async def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        summary_path = mission_dir / "mission-run.json"
+        if not summary_path.exists():
+            return None
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+
+    async def get_artifact_content(self, mission_id: str, artifact_id: str) -> str | None:
+        summary = await self.get_mission_run_summary(mission_id)
+        if not summary or "result" not in summary:
+            return None
+
+        artifacts = summary["result"].get("artifacts", [])
+        artifact = next((a for a in artifacts if a["id"] == artifact_id), None)
+        if not artifact:
+            # Try prefix match for short IDs
+            artifact = next((a for a in artifacts if a["id"].startswith(artifact_id)), None)
+
+        if not artifact or "path" not in artifact:
+            return None
+
+        path = Path(artifact["path"])
+        if not path.exists():
+            return None
+
+        return path.read_text(encoding="utf-8")
 
     async def finalize_distributed_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)

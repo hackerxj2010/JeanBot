@@ -41,6 +41,18 @@ def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def asdict_fallback(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, list):
+        return [asdict_fallback(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    if hasattr(obj, "__dataclass_fields__"):
+        return {k: asdict_fallback(getattr(obj, k)) for k in obj.__dataclass_fields__}
+    return obj
+
+
 @dataclass
 class AuditEventRecord:
     event: str
@@ -233,16 +245,126 @@ class StaticPolicyService:
 
 
 @dataclass
-class HttpRuntimeService:
-    base_url: str = field(
-        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
-    )
+class HttpBaseService:
+    api_url: str
     token: str = field(
         default_factory=lambda: os.environ.get(
             "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
         )
     )
+    timeout: float = 300.0
 
+    def __post_init__(self):
+        self.api_url = self.api_url.rstrip("/")
+
+    def _headers(self, service_name: str = "agent-orchestrator") -> dict[str, str]:
+        return {
+            "x-jeanbot-internal-service": service_name,
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+
+    async def _post(
+        self,
+        path: str,
+        json_data: dict[str, Any],
+        service_name: str = "agent-orchestrator",
+    ) -> dict[str, Any]:
+        if httpx is None:
+            raise RuntimeError(
+                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
+            )
+        url = f"{self.api_url}/{path.lstrip('/')}"
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.post(url, headers=self._headers(service_name), json=json_data)
+            response.raise_for_status()
+            return response.json()
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": service,
+            "details": data,
+        }
+        await self._post("/api/audit/record", payload, service_name=service)
+
+
+@dataclass
+class HttpBrowserService(HttpBaseService):
+    async def navigate(self, url: str) -> dict[str, Any]:
+        return await self._post("/api/browser/navigate", {"url": url})
+
+    async def capture(self) -> dict[str, Any]:
+        return await self._post("/api/browser/capture", {})
+
+
+@dataclass
+class HttpTerminalService(HttpBaseService):
+    async def run(self, command: str) -> dict[str, Any]:
+        return await self._post("/api/terminal/run", {"command": command})
+
+
+@dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        payload = {
+            "toolId": "filesystem.workspace.context.update",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionTitle": mission_title,
+                "completedSteps": completed_steps,
+                "runningSteps": running_steps,
+                "pendingSteps": pending_steps,
+            },
+        }
+        await self._post("/api/tools/execute", payload)
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        payload = {
+            "toolId": "filesystem.artifact.write",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionId": mission_id,
+                "filename": filename,
+                "content": content,
+            },
+        }
+        result = await self._post("/api/tools/execute", payload)
+        return result.get("path", "")
+
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        pass
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        return None
+
+
+@dataclass
+class HttpPolicyService(HttpBaseService):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Mock synchronous evaluation for now as required by protocol
+        return PolicyDecision(approval_required=False, risk="low")
+
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
     def prepare_frame(
         self,
         objective: MissionObjective,
@@ -266,20 +388,7 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
-        if httpx is None:
-            raise RuntimeError(
-                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
-            )
-        url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
-        headers = {
-            "x-jeanbot-internal-service": "agent-orchestrator",
-            "x-jeanbot-internal-token": self.token,
-            "content-type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, headers=headers, json=request)
-            response.raise_for_status()
-            return response.json()
+        return await self._post("/internal/runtime/execute", request)
 
 
 @dataclass
@@ -331,6 +440,30 @@ class DeterministicRuntimeService:
 class HttpSubAgentService:
     runtime: HttpRuntimeService
 
+    CAPABILITY_MAP = {
+        "research": {
+            "role": "strategist",
+            "tools": ["web_search", "browser_extract", "read_file"],
+        },
+        "browser": {
+            "role": "browser-operator",
+            "tools": ["browser_navigate", "browser_extract", "browser_capture"],
+        },
+        "terminal": {
+            "role": "terminal-operator",
+            "tools": ["terminal.command.run", "read_file", "write_file"],
+        },
+        "software-development": {
+            "role": "coder",
+            "tools": ["read_file", "write_file", "terminal.command.run"],
+        },
+        "delivery": {"role": "writer", "tools": ["read_file", "write_file"]},
+        "verification": {
+            "role": "analyst",
+            "tools": ["read_file", "terminal.command.run"],
+        },
+    }
+
     def spawn_for_plan(self, plan: MissionPlan) -> list[SubAgentTemplate]:
         templates: list[SubAgentTemplate] = []
         seen: set[str] = set()
@@ -338,13 +471,18 @@ class HttpSubAgentService:
             if step.capability in seen:
                 continue
             seen.add(step.capability)
+
+            config = self.CAPABILITY_MAP.get(
+                step.capability, {"role": "generalist", "tools": None}
+            )
+
             templates.append(
                 SubAgentTemplate(
                     specialization=step.capability,
-                    role=step.assignee or f"{step.capability}-operator",
+                    role=step.assignee or config["role"],
                     provider="anthropic",
                     model="claude-sonnet-4-6",
-                    tool_ids=None,
+                    tool_ids=config["tools"],
                     max_parallel_tasks=1,
                     instructions=f"Complete step '{step.title}': {step.description}",
                 )
@@ -361,47 +499,17 @@ class HttpSubAgentService:
         attempt: int = params.get("attempt", 1)
 
         request = {
-            "objective": {
-                "id": objective.id,
-                "workspaceId": objective.workspace_id,
-                "userId": "python-executor",
-                "title": objective.title,
-                "objective": objective.objective,
-                "context": f"Python execution context for {objective.title}",
-                "constraints": [],
-                "requiredCapabilities": [step.capability],
-                "risk": objective.risk,
-                "createdAt": utc_now_iso(),
-            },
-            "step": {
-                "id": step.id,
-                "title": step.title,
-                "description": step.description,
-                "capability": step.capability,
-                "stage": step.stage,
-                "dependsOn": step.depends_on,
-                "verification": f"Step {step.id} completed successfully.",
-                "assignee": template.role,
-                "status": "ready",
-            },
+            "objective": asdict_fallback(objective),
+            "step": asdict_fallback(step),
             "plan": {
                 "id": f"plan-{mission_id}",
                 "missionId": mission_id,
                 "version": plan.version,
                 "summary": f"Python-initiated plan for {objective.title}",
-                "steps": [],  # Minimal plan for individual step execution
+                "steps": [],
                 "generatedAt": utc_now_iso(),
             },
-            "template": {
-                "id": f"template-{step.capability}",
-                "role": template.role,
-                "specialization": step.capability,
-                "instructions": template.instructions or step.description,
-                "maxParallelTasks": template.max_parallel_tasks,
-                "provider": template.provider,
-                "model": template.model,
-                "toolIds": template.tool_ids,
-            },
+            "template": asdict_fallback(template),
             "context": {
                 "sessionId": f"session-{mission_id}",
                 "workspaceRoot": context.workspace_root,
