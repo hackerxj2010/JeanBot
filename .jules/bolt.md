@@ -1,0 +1,3 @@
+## 2026-04-19 - [Node.js Performance Patterns]
+**Learning:** Removing nullish coalescing operator (`?? 0`) from performance-critical tight loops (e.g., in `cosineSimilarity`) can yield significant speedups (up to 80% improvement for 100k calculations) by reducing branch overhead in Node.js, but it sacrifices safety if the array can have holes or undefined values. Also, `crypto.hash(algorithm, data, output)` in Node 22+ is a much more efficient single-shot hashing method.
+**Action:** Use `crypto.hash` for one-shot operations in Node 22+ environments. Favor `for` loops and pre-allocated arrays over `Array.from` or `map`/`reduce` in hot paths. Be cautious about removing safety checks in utility functions unless the caller's input can be strictly guaranteed.
