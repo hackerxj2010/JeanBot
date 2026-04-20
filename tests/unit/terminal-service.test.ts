@@ -44,4 +44,20 @@ describe("TerminalService", () => {
     const watches = await service.listWatches(workspaceId);
     expect(watches.some((record) => record.cwd === cwd)).toBe(true);
   });
+
+  it("redacts secrets in outputPreview", async () => {
+    const service = new TerminalService();
+    const workspaceId = `terminal-workspace-${Date.now()}`;
+    const cwd = path.resolve(".");
+
+    const execution = await service.run({
+      workspaceId,
+      command: "echo My secret key is sk-1234567890abcdef",
+      cwd,
+      requestedBy: "terminal-test"
+    });
+
+    expect(execution.record.outputPreview).toContain("[REDACTED_OPENAI_KEY]");
+    expect(execution.record.outputPreview).not.toContain("sk-1234567890abcdef");
+  });
 });
