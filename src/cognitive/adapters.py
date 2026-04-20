@@ -41,6 +41,18 @@ def utc_json(value: Any) -> str:
     return json.dumps(value, indent=2, sort_keys=True)
 
 
+def asdict_fallback(obj: Any) -> Any:
+    if isinstance(obj, Path):
+        return str(obj)
+    if hasattr(obj, "__dataclass_fields__"):
+        return {k: asdict_fallback(v) for k, v in asdict(obj).items()}
+    if isinstance(obj, list):
+        return [asdict_fallback(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    return obj
+
+
 @dataclass
 class AuditEventRecord:
     event: str
@@ -56,6 +68,34 @@ class MemoryRecord:
     tags: list[str]
     memory_type: str
     importance: float
+
+
+@dataclass
+class HttpBaseService:
+    api_url: str
+    token: str
+
+    def __post_init__(self):
+        self.api_url = self.api_url.rstrip("/")
+
+    def _headers(self, service: str = "agent-orchestrator") -> dict[str, str]:
+        return {
+            "x-jeanbot-internal-service": service,
+            "x-jeanbot-internal-token": self.token,
+            "content-type": "application/json",
+        }
+
+    async def _post(self, path: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if httpx is None:
+            raise RuntimeError("httpx is required for HTTP adapters")
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(
+                f"{self.api_url}{path}",
+                headers=self._headers(),
+                json=asdict_fallback(payload),
+            )
+            response.raise_for_status()
+            return response.json()
 
 
 @dataclass
@@ -86,6 +126,18 @@ class LocalAuditService:
             "total_records": len(self.records),
             "events": by_event,
         }
+
+
+@dataclass
+class HttpAuditService(HttpBaseService):
+    async def record(self, event: str, entity_id: str, service: str, data: dict):
+        payload = {
+            "kind": event,
+            "entityId": entity_id,
+            "actor": service,
+            "details": data,
+        }
+        await self._post("/api/audit/record", payload)
 
 
 @dataclass
@@ -214,6 +266,54 @@ class LocalFileService:
 
 
 @dataclass
+class HttpFileService(HttpBaseService):
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        payload = {
+            "toolId": "filesystem.workspace.context.update",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionTitle": mission_title,
+                "completedSteps": completed_steps,
+                "runningSteps": running_steps,
+                "pendingSteps": pending_steps,
+            },
+        }
+        await self._post("/api/tools/execute", payload)
+
+    async def write_artifact(
+        self,
+        workspace_root: str,
+        mission_id: str,
+        filename: str,
+        content: str,
+    ) -> str:
+        payload = {
+            "toolId": "filesystem.artifact.write",
+            "arguments": {
+                "workspaceRoot": workspace_root,
+                "missionId": mission_id,
+                "filename": filename,
+                "content": content,
+            },
+        }
+        result = await self._post("/api/tools/execute", payload)
+        return result.get("path", filename)
+
+    async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
+        pass
+
+    async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        return None
+
+
+@dataclass
 class StaticPolicyService:
     approval_required: bool = False
     default_risk: str = "low"
@@ -233,16 +333,27 @@ class StaticPolicyService:
 
 
 @dataclass
-class HttpRuntimeService:
-    base_url: str = field(
-        default_factory=lambda: os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8084")
-    )
-    token: str = field(
-        default_factory=lambda: os.environ.get(
-            "INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"
-        )
-    )
+class HttpPolicyService(HttpBaseService):
+    def evaluate_mission(self, mission_data: dict) -> PolicyDecision:
+        # Policy evaluation is synchronous in protocol, so we use a sync request
+        if httpx is None:
+            raise RuntimeError("httpx is required for HTTP adapters")
+        with httpx.Client(timeout=10.0) as client:
+            response = client.post(
+                f"{self.api_url}/api/policy/evaluate",
+                headers=self._headers(),
+                json=mission_data,
+            )
+            response.raise_for_status()
+            data = response.json()
+            return PolicyDecision(
+                approval_required=data.get("approvalRequired", False),
+                risk=data.get("risk", "low"),
+            )
 
+
+@dataclass
+class HttpRuntimeService(HttpBaseService):
     def prepare_frame(
         self,
         objective: MissionObjective,
@@ -266,20 +377,22 @@ class HttpRuntimeService:
         }
 
     async def execute_task(self, request: dict[str, Any]) -> dict[str, Any]:
-        if httpx is None:
-            raise RuntimeError(
-                "Live mode requires optional dependency 'httpx'. Install it with: pip install httpx"
-            )
-        url = f"{self.base_url.rstrip('/')}/internal/runtime/execute"
-        headers = {
-            "x-jeanbot-internal-service": "agent-orchestrator",
-            "x-jeanbot-internal-token": self.token,
-            "content-type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(url, headers=headers, json=request)
-            response.raise_for_status()
-            return response.json()
+        return await self._post("/internal/runtime/execute", request)
+
+
+@dataclass
+class HttpBrowserService(HttpBaseService):
+    async def navigate(self, url: str) -> dict[str, Any]:
+        return await self._post("/api/browser/navigate", {"url": url})
+
+    async def capture(self) -> dict[str, Any]:
+        return await self._post("/api/browser/capture", {})
+
+
+@dataclass
+class HttpTerminalService(HttpBaseService):
+    async def run(self, command: str) -> dict[str, Any]:
+        return await self._post("/api/terminal/run", {"command": command})
 
 
 @dataclass

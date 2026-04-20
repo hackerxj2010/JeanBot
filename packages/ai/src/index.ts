@@ -24,12 +24,11 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -38,12 +37,21 @@ const normalizeVector = (values: number[]) => {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sum = 0;
+  for (let i = 0; i < values.length; i++) {
+    sum += values[i] * values[i];
+  }
+  const magnitude = Math.sqrt(sum);
   if (magnitude === 0) {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    result[i] = Math.round(values[i] * invMagnitude * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -227,8 +235,8 @@ export const cosineSimilarity = (left: number[] | undefined, right: number[] | u
   let leftMagnitude = 0;
   let rightMagnitude = 0;
   for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+    const leftValue = left[index];
+    const rightValue = right[index];
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;
