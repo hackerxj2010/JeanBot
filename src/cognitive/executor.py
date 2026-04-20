@@ -223,6 +223,15 @@ class SubAgentService(Protocol):
     async def run_step(self, params: dict) -> SubAgentExecutionResult: ...
 
 
+class BrowserService(Protocol):
+    async def navigate(self, url: str) -> dict[str, Any]: ...
+    async def capture(self) -> dict[str, Any]: ...
+
+
+class TerminalService(Protocol):
+    async def run(self, command: str) -> dict[str, Any]: ...
+
+
 class MissionExecutionIntelligence:
     def assess_step(
         self,
@@ -467,6 +476,8 @@ class MissionExecutor:
         sub_agent_service: SubAgentService,
         file_service: FileService,
         policy_service: PolicyService,
+        browser_service: BrowserService | None = None,
+        terminal_service: TerminalService | None = None,
     ):
         self.runtime = runtime
         self.memory_service = memory_service
@@ -474,6 +485,8 @@ class MissionExecutor:
         self.sub_agent_service = sub_agent_service
         self.file_service = file_service
         self.policy_service = policy_service
+        self.browser_service = browser_service
+        self.terminal_service = terminal_service
         self.intelligence = MissionExecutionIntelligence()
         self.replanner = AdaptiveReplanner()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import uuid
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -9,8 +10,13 @@ from typing import Any
 from .adapters import (
     DeterministicRuntimeService,
     DeterministicSubAgentService,
+    HttpAuditService,
+    HttpBrowserService,
+    HttpFileService,
+    HttpPolicyService,
     HttpRuntimeService,
     HttpSubAgentService,
+    HttpTerminalService,
     LocalAuditService,
     LocalFileService,
     LocalMemoryService,
@@ -38,12 +44,14 @@ class MissionExecutionBundle:
     record: MissionRecord
     context: ExecutionContext
     executor: MissionExecutor
-    audit_service: LocalAuditService
-    memory_service: LocalMemoryService
-    file_service: LocalFileService
-    runtime_service: DeterministicRuntimeService
-    subagent_service: DeterministicSubAgentService
-    policy_service: StaticPolicyService
+    audit_service: LocalAuditService  # type: ignore
+    memory_service: LocalMemoryService  # type: ignore
+    file_service: LocalFileService  # type: ignore
+    runtime_service: DeterministicRuntimeService  # type: ignore
+    subagent_service: DeterministicSubAgentService  # type: ignore
+    policy_service: StaticPolicyService  # type: ignore
+    browser_service: Any | None = None
+    terminal_service: Any | None = None
 
 
 @dataclass
@@ -83,16 +91,23 @@ class MissionExecutorService:
             max_parallelism=int(mission_payload.get("max_parallelism", self.max_parallelism)),
             auth_context=mission_payload.get("auth_context"),
         )
-        audit_service = LocalAuditService(output_root=self.workspace_root)
-        memory_service = LocalMemoryService(output_root=self.workspace_root)
-        file_service = LocalFileService(output_root=self.workspace_root)
-
         execution_mode = mission_payload.get("mode", self.mode)
+        api_url = mission_payload.get("api_url", os.environ.get("AGENT_RUNTIME_URL", "http://localhost:8080"))
+        token = mission_payload.get("token", os.environ.get("INTERNAL_SERVICE_TOKEN", "jeanbot-internal-dev-token"))
 
         if execution_mode == "live":
-            runtime_service = HttpRuntimeService()
+            audit_service = HttpAuditService(api_url=api_url, token=token)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = HttpFileService(api_url=api_url, token=token)
+            runtime_service = HttpRuntimeService(api_url=api_url, token=token)
             subagent_service = HttpSubAgentService(runtime=runtime_service)
+            policy_service = HttpPolicyService(api_url=api_url, token=token)
+            browser_service = HttpBrowserService(api_url=api_url, token=token)
+            terminal_service = HttpTerminalService(api_url=api_url, token=token)
         else:
+            audit_service = LocalAuditService(output_root=self.workspace_root)
+            memory_service = LocalMemoryService(output_root=self.workspace_root)
+            file_service = LocalFileService(output_root=self.workspace_root)
             runtime_service = DeterministicRuntimeService(
                 provider=mission_payload.get("provider", self.provider),
                 model=mission_payload.get("model", self.model),
@@ -100,11 +115,14 @@ class MissionExecutorService:
             subagent_service = DeterministicSubAgentService(
                 failure_policy=dict(self.failure_policy | mission_payload.get("failure_policy", {}))
             )
-        policy_service = StaticPolicyService(
-            approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
-            default_risk=mission_payload.get("risk", "low"),
-            capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
-        )
+            policy_service = StaticPolicyService(
+                approval_required=bool(mission_payload.get("approval_required", self.approval_required)),
+                default_risk=mission_payload.get("risk", "low"),
+                capability_risk=dict(self.capability_risk | mission_payload.get("capability_risk", {})),
+            )
+            browser_service = None
+            terminal_service = None
+
         executor = MissionExecutor(
             runtime=runtime_service,
             memory_service=memory_service,
@@ -112,6 +130,8 @@ class MissionExecutorService:
             sub_agent_service=subagent_service,
             file_service=file_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
         return MissionExecutionBundle(
             record=record,
@@ -123,6 +143,8 @@ class MissionExecutorService:
             runtime_service=runtime_service,
             subagent_service=subagent_service,
             policy_service=policy_service,
+            browser_service=browser_service,
+            terminal_service=terminal_service,
         )
 
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
