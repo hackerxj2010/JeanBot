@@ -1,0 +1,4 @@
+## 2026-04-20 - [Expanded Secret Redaction and Deep Sanitization]
+**Vulnerability:** API keys and tokens (Anthropic, Stripe, GitHub, etc.) were being leaked into terminal output previews and audit logs because the `redactSecrets` utility was too limited and was not being applied to terminal execution metadata.
+**Learning:** Generic secret patterns (like `sk-`) are insufficient and can lead to misidentification. Explicitly ordering more specific prefixes first and using word boundaries (`\b`) is essential for reliable redaction. Furthermore, structured data (like audit log details) needs recursive sanitization to ensure no secrets are hidden within nested objects.
+**Prevention:** Always use the `@jeanbot/security` package to sanitize any data before it is persisted to logs or returned in UI previews. Use the `sanitizeData` utility for structured objects and `redactSecrets` for raw strings. Ensure redaction patterns are updated as new providers are added.
