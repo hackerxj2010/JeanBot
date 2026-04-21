@@ -179,6 +179,28 @@ class MissionExecutorService:
         path_obj.write_text(utc_json(payload), encoding="utf-8")
         return str(path_obj)
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        path = mission_dir / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_artifact_content(self, mission_id: str, artifact_id_or_path: str) -> str | None:
+        # Try as absolute path or relative to workspace root
+        path = Path(artifact_id_or_path)
+        if not path.is_absolute():
+            path = Path(self.workspace_root) / artifact_id_or_path
+
+        if not path.exists() or not path.is_file():
+            # Try within mission artifacts directory
+            artifact_dir = Path(self.workspace_root) / ".jeanbot" / "artifacts" / mission_id
+            path = artifact_dir / Path(artifact_id_or_path).name
+            if not path.exists() or not path.is_file():
+                return None
+
+        return path.read_text(encoding="utf-8")
+
     def _persist_run_summary(
         self,
         bundle: MissionExecutionBundle,
