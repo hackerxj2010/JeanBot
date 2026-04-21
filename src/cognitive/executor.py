@@ -393,8 +393,38 @@ class AdaptiveReplanner:
             }
         
         failure_class = diagnostics.failure_class if diagnostics else "unknown"
-        
-        if failure_class == "verification_failed" and attempts < 3:
+
+        if failure_class == "tool_error" and attempts < 3:
+            decision_entries.append({
+                "step_id": step.id,
+                "category": "retry_strategy",
+                "severity": "warning",
+                "scope": "step",
+                "summary": "Step encountered tool errors, retrying with tool-specific guidance",
+                "reasoning": f"Tool execution failed during step {step.id}",
+                "recommended_actions": ["Check tool parameters", "Verify workspace permissions"],
+                "metadata": {"attempts": attempts, "failure_class": failure_class},
+                "created_at": utc_now_iso(),
+                "plan_version": record.plan_version or 1,
+            })
+            patched = True
+
+        elif failure_class == "timeout" and attempts < 2:
+            decision_entries.append({
+                "step_id": step.id,
+                "category": "retry_strategy",
+                "severity": "warning",
+                "scope": "step",
+                "summary": "Step timed out, retrying with increased timeout or simplified tasks",
+                "reasoning": f"Step {step.id} exceeded time limit",
+                "recommended_actions": ["Increase timeout", "Break into smaller sub-tasks"],
+                "metadata": {"attempts": attempts, "failure_class": failure_class},
+                "created_at": utc_now_iso(),
+                "plan_version": record.plan_version or 1,
+            })
+            patched = True
+
+        elif failure_class == "verification_failed" and attempts < 3:
             decision_entries.append({
                 "step_id": step.id,
                 "category": "retry_strategy",
