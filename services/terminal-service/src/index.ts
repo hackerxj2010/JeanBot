@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
+import { redactSecrets, sanitizeData } from "@jeanbot/security";
 import {
   assertInternalRequest,
   authContextFromHeaders,
@@ -162,11 +163,12 @@ export class TerminalService {
       open(stderrPath, "w").then((handle) => handle.writeFile(stderr, "utf8").finally(() => handle.close()))
     ]);
 
+    const combinedOutput = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n");
     return {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(combinedOutput).slice(0, 400)
     };
   }
 
@@ -233,7 +235,9 @@ export class TerminalService {
     actor: string,
     details: Record<string, unknown>
   ) {
-    await this.auditService.record(kind, entityId, actor, details);
+    // Sanitize audit log details to prevent secret leakage
+    const sanitizedDetails = sanitizeData(details);
+    await this.auditService.record(kind, entityId, actor, sanitizedDetails);
   }
 
   async run(input: TerminalRunRequest) {
