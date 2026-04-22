@@ -138,6 +138,32 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    async def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        summary_path = mission_dir / "mission-run.json"
+        if not summary_path.exists():
+            return None
+        return json.loads(summary_path.read_text(encoding="utf-8"))
+
+    async def get_artifact_content(self, mission_id: str, artifact_id: str) -> str | None:
+        # artifact_id can be a filename or a partial path
+        mission_dir = self._mission_dir(mission_id)
+        # Search in artifacts
+        artifact_root = Path(self.workspace_root) / ".jeanbot" / "artifacts" / mission_id
+        if not artifact_root.exists():
+            return None
+
+        target = artifact_root / artifact_id
+        if target.exists() and target.is_file():
+            return target.read_text(encoding="utf-8")
+
+        # Try finding by name if id is just a name
+        for item in artifact_root.glob("**/*"):
+            if item.is_file() and (item.name == artifact_id or str(item).endswith(artifact_id)):
+                return item.read_text(encoding="utf-8")
+
+        return None
+
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
