@@ -9,6 +9,16 @@ from typing import Sequence
 
 from .service import MissionExecutorService
 
+# ANSI color constants
+BLUE = "\033[94m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+MAGENTA = "\033[95m"
+CYAN = "\033[96m"
+BOLD = "\033[1m"
+RESET = "\033[0m"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="JeanBot Python mission runner")
@@ -43,17 +53,29 @@ async def run_shell(args: argparse.Namespace):
         pass
 
     service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
-    print(f"JeanBot interactive shell ({args.mode} mode)")
-    print(f"Workspace: {args.workspace_root} ({args.workspace_id})")
-    print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
+
+    banner = f"""
+{BOLD}{BLUE}┌──────────────────────────────────────────────────────────┐
+│                                                          │
+│  {GREEN}JeanBot Interactive Shell{BLUE}                               │
+│  {CYAN}Mode: {args.mode:<10}{BLUE}                                        │
+│                                                          │
+└──────────────────────────────────────────────────────────┘{RESET}
+"""
+    print(banner)
+    print(f"{BOLD}Workspace:{RESET} {args.workspace_root} ({args.workspace_id})")
+    print(f"Type '{YELLOW}help{RESET}' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    # We'll use a fixed mission ID for the session to support resumption,
+    # but objectives will change.
+    session_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
 
     while True:
         try:
-            line = input("\njeanbot> ").strip()
+            prompt = f"\n{BOLD}{GREEN}jeanbot{RESET}> "
+            line = input(prompt).strip()
             if not line:
                 continue
             if line.lower() in ("exit", "quit"):
@@ -62,55 +84,113 @@ async def run_shell(args: argparse.Namespace):
             history.append(line)
 
             if line.lower() == "help":
-                print("Commands:")
-                print("  help              Show this help")
-                print("  history           Show command history")
-                print("  exit | quit       Exit shell")
-                print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
+                print(f"\n{BOLD}Available Commands:{RESET}")
+                print(f"  {YELLOW}help{RESET}              Show this help")
+                print(f"  {YELLOW}history{RESET}           Show command history")
+                print(f"  {YELLOW}status{RESET}            Show last mission status")
+                print(f"  {YELLOW}artifacts{RESET}         List produced artifacts")
+                print(f"  {YELLOW}view <id|path>{RESET}    View artifact content")
+                print(f"  {YELLOW}exit | quit{RESET}       Exit shell")
+                print(f"  {BOLD}<objective>{RESET}       Plan and execute a new mission")
+                print(f"  {BOLD}refine <feedback>{RESET} Refine the last mission result")
                 continue
 
             if line.lower() == "history":
+                print(f"\n{BOLD}Command History:{RESET}")
                 for i, cmd in enumerate(history, 1):
-                    print(f"  {i:3}  {cmd}")
+                    print(f"  {BLUE}{i:3}{RESET}  {cmd}")
                 continue
 
+            if line.lower() == "status":
+                summary = await service.get_mission_run_summary(session_mission_id)
+                if not summary:
+                    print(f"{YELLOW}No active mission run found for this session.{RESET}")
+                else:
+                    res = summary.get("result", {})
+                    print(f"\n{BOLD}Current Mission Status:{RESET}")
+                    print(f"  {BOLD}ID:{RESET}      {session_mission_id}")
+                    print(f"  {BOLD}Status:{RESET}  {res.get('status', 'unknown')}")
+                    print(f"  {BOLD}Summary:{RESET} {res.get('verification_summary', 'N/A')}")
+                continue
+
+            if line.lower() == "artifacts":
+                summary = await service.get_mission_run_summary(session_mission_id)
+                if not summary or not summary.get("result", {}).get("artifacts"):
+                    print(f"{YELLOW}No artifacts found.{RESET}")
+                else:
+                    print(f"\n{BOLD}Artifacts:{RESET}")
+                    for i, art in enumerate(summary["result"]["artifacts"], 1):
+                        print(f"  {BLUE}[{i}]{RESET} { art.get('title') }")
+                        print(f"      {CYAN}Path:{RESET} { art.get('path') }")
+                continue
+
+            if line.lower().startswith("view "):
+                target = line[5:].strip()
+                content = await service.get_artifact_content(session_mission_id, target)
+                if content:
+                    print(f"\n{BOLD}Content of {target}:{RESET}")
+                    print("-" * 40)
+                    print(content)
+                    print("-" * 40)
+                else:
+                    print(f"{RED}Artifact '{target}' not found.{RESET}")
+                continue
+
+            # Mission execution
             if line.lower().startswith("refine "):
                 if not last_result:
-                    print("Nothing to refine. Run a mission first.")
-                    continue
+                    # Try to load from summary if last_result is None (e.g. after restart)
+                    summary = await service.get_mission_run_summary(session_mission_id)
+                    if summary:
+                        last_summary_text = summary.get("result", {}).get("verification_summary", "N/A")
+                    else:
+                        print(f"{RED}Nothing to refine. Run a mission first.{RESET}")
+                        continue
+                else:
+                    last_summary_text = last_result.verification_summary
+
                 feedback = line[7:].strip()
                 objective = (
                     f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
+                    f"Previous summary: {last_summary_text}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
             else:
                 objective = line
                 title = f"Mission: {line[:30]}..."
 
+            # For new objectives in the same session, we keep the mission_id
+            # so the executor can recover state if it wants, though usually
+            # new objectives might want fresh start.
+            # Here we follow the existing pattern of using mission_id.
+
             payload = {
-                "mission_id": mission_id,
+                "mission_id": session_mission_id,
                 "workspace_id": args.workspace_id,
                 "title": title,
                 "objective": objective,
                 "mode": args.mode,
             }
 
-            print(f"Executing: {title}")
+            print(f"\n{BOLD}{BLUE}>>> Executing:{RESET} {BOLD}{title}{RESET}")
             last_result = await service.execute_payload(payload)
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
+            status_color = GREEN if last_result.status == "completed" else RED
+            print(f"\n{BOLD}Status:{RESET}  {status_color}{last_result.status}{RESET}")
+            print(f"{BOLD}Summary:{RESET} {last_result.verification_summary}")
+
             if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
+                print(f"{BOLD}Artifacts:{RESET} {len(last_result.artifacts)}")
                 for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+                    print(f"  - {artifact.title}: {CYAN}{artifact.path}{RESET}")
 
         except KeyboardInterrupt:
-            print("\nInterrupt received, type 'exit' to quit.")
+            print(f"\n{YELLOW}Interrupt received, type 'exit' to quit.{RESET}")
+        except EOFError:
+            print(f"\n{YELLOW}EOF received, exiting...{RESET}")
+            break
         except Exception as e:
-            print(f"\nError: {e}")
+            print(f"\n{RED}{BOLD}Error:{RESET} {e}")
 
 
 async def run_command(args: argparse.Namespace) -> dict:
