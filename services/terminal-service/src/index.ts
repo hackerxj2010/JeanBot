@@ -5,6 +5,7 @@ import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import Fastify from "fastify";
 
+import { redactSecrets, sanitizeData } from "@jeanbot/security";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
@@ -166,7 +167,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n")
+      ).slice(0, 400)
     };
   }
 
@@ -233,7 +236,7 @@ export class TerminalService {
     actor: string,
     details: Record<string, unknown>
   ) {
-    await this.auditService.record(kind, entityId, actor, details);
+    await this.auditService.record(kind, entityId, actor, sanitizeData(details));
   }
 
   async run(input: TerminalRunRequest) {
