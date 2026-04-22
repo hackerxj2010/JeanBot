@@ -1,0 +1,3 @@
+## 2026-04-22 - [AI] Optimized Vector Operations and Hashing
+**Learning:** Node 22+ single-shot `crypto.hash` is significantly faster than the legacy `createHash().update().digest()` pattern for small inputs. Additionally, `Number(val.toFixed(8))` is a significant performance bottleneck in hot loops due to string serialization; replacing it with `Math.round(val * 1e8) / 1e8` provides a major speedup. Optimized `for` loops with pre-allocated arrays and inverse-magnitude multiplication also outperformed functional patterns like `reduce` and `map`.
+**Action:** Use `crypto.hash` for non-streaming hash needs and avoid string-based number formatting in performance-critical mathematical loops.
