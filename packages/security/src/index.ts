@@ -37,6 +37,30 @@ export const redactSecrets = (input: string) => {
     .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
 };
 
+export const sanitizeData = <T>(data: T): T => {
+  if (typeof data === "string") {
+    return redactSecrets(data) as unknown as T;
+  }
+
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeData(item)) as unknown as T;
+  }
+
+  if (data instanceof Date) {
+    return data;
+  }
+
+  if (data !== null && typeof data === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      result[key] = sanitizeData(value);
+    }
+    return result as unknown as T;
+  }
+
+  return data;
+};
+
 export const ensureLeastPrivilege = (
   tool: ToolDescriptor,
   requestedPermissions: string[]
