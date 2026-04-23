@@ -9,6 +9,14 @@ from typing import Sequence
 
 from .service import MissionExecutorService
 
+# ANSI color constants for shell UX
+BLUE = "\033[94m"
+GREEN = "\033[92m"
+YELLOW = "\033[93m"
+RED = "\033[91m"
+BOLD = "\033[1m"
+END = "\033[0m"
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="JeanBot Python mission runner")
@@ -43,7 +51,7 @@ async def run_shell(args: argparse.Namespace):
         pass
 
     service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
-    print(f"JeanBot interactive shell ({args.mode} mode)")
+    print(f"{BOLD}{BLUE}JeanBot interactive shell{END} ({args.mode} mode)")
     print(f"Workspace: {args.workspace_root} ({args.workspace_id})")
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
@@ -53,7 +61,7 @@ async def run_shell(args: argparse.Namespace):
 
     while True:
         try:
-            line = input("\njeanbot> ").strip()
+            line = input(f"\n{BOLD}{GREEN}jeanbot>{END} ").strip()
             if not line:
                 continue
             if line.lower() in ("exit", "quit"):
@@ -62,9 +70,12 @@ async def run_shell(args: argparse.Namespace):
             history.append(line)
 
             if line.lower() == "help":
-                print("Commands:")
+                print(f"{BOLD}Commands:{END}")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show current mission status")
+                print("  artifacts         List produced artifacts")
+                print("  view <id|path>    Display artifact content")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
@@ -75,14 +86,59 @@ async def run_shell(args: argparse.Namespace):
                     print(f"  {i:3}  {cmd}")
                 continue
 
+            if line.lower() == "status":
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary:
+                    print("No active mission session found.")
+                else:
+                    res = summary.get("result", {})
+                    print(f"{BOLD}Mission Status:{END} {res.get('status', 'unknown')}")
+                    print(f"{BOLD}Summary:{END} {res.get('verification_summary', 'N/A')}")
+                    print(f"{BOLD}Metrics:{END}")
+                    for k, v in res.get("metrics", {}).items():
+                        print(f"  - {k}: {v}")
+                continue
+
+            if line.lower() == "artifacts":
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary:
+                    print("No mission artifacts found.")
+                else:
+                    artifacts = summary.get("result", {}).get("artifacts", [])
+                    print(f"{BOLD}Artifacts ({len(artifacts)}):{END}")
+                    for a in artifacts:
+                        print(f"  - {BOLD}{a['id'][:8]}{END} {a['title']} ({a['path']})")
+                continue
+
+            if line.lower().startswith("view "):
+                artifact_id = line[5:].strip()
+                content_bundle = service.get_artifact_content(mission_id, artifact_id)
+                if not content_bundle:
+                    print(f"{RED}Artifact not found: {artifact_id}{END}")
+                else:
+                    artifact = content_bundle["artifact"]
+                    print(f"\n{BOLD}--- {artifact['title']} ---{END}")
+                    print(content_bundle["content"])
+                    print(f"{BOLD}--- End of {artifact['id'][:8]} ---{END}")
+                continue
+
             if line.lower().startswith("refine "):
-                if not last_result:
-                    print("Nothing to refine. Run a mission first.")
-                    continue
                 feedback = line[7:].strip()
+                summary_text = ""
+                if last_result:
+                    summary_text = last_result.verification_summary
+                else:
+                    summary = service.get_mission_run_summary(mission_id)
+                    if summary:
+                        summary_text = summary.get("result", {}).get("verification_summary", "")
+
+                if not summary_text:
+                    print(f"{YELLOW}Nothing to refine. Run a mission first.{END}")
+                    continue
+
                 objective = (
                     f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
+                    f"Previous summary: {summary_text}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
             else:
@@ -97,15 +153,16 @@ async def run_shell(args: argparse.Namespace):
                 "mode": args.mode,
             }
 
-            print(f"Executing: {title}")
+            print(f"{BLUE}Executing:{END} {BOLD}{title}{END}")
             last_result = await service.execute_payload(payload)
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
+            color = GREEN if last_result.status == "completed" else RED
+            print(f"\n{BOLD}Status:{END} {color}{last_result.status}{END}")
+            print(f"{BOLD}Summary:{END} {last_result.verification_summary}")
             if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
+                print(f"{BOLD}Artifacts:{END} {len(last_result.artifacts)}")
                 for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+                    print(f"  - {BOLD}{artifact.id[:8]}{END} {artifact.title}: {artifact.path}")
 
         except KeyboardInterrupt:
             print("\nInterrupt received, type 'exit' to quit.")

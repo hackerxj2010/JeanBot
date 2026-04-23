@@ -1152,6 +1152,13 @@ class MissionExecutor:
             # Merging logic could be more complex, but for now we focus on basic recovery parity
             record.decision_log.extend(existing_state.get("decision_log", []))
             record.replan_history.extend(existing_state.get("replan_history", []))
+            record.plan_version = existing_state.get("plan_version", record.plan_version)
+
+            if record.plan and "step_statuses" in existing_state:
+                status_map = existing_state["step_statuses"]
+                for step in record.plan.steps:
+                    if step.id in status_map:
+                        step.status = status_map[step.id]
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
@@ -1243,6 +1250,7 @@ class MissionExecutor:
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "step_statuses": {s.id: s.status for s in active_plan.steps},
             })
 
             await self.audit_service.record(
