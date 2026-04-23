@@ -363,5 +363,34 @@ class MissionExecutorService:
     def _mission_dir(self, mission_id: str) -> Path:
         return ensure_directory(Path(self.workspace_root) / ".jeanbot" / "missions" / mission_id)
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        path = mission_dir / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_artifact_content(self, mission_id: str, artifact_id: str) -> dict[str, Any] | None:
+        summary = self.get_mission_run_summary(mission_id)
+        if not summary:
+            return None
+
+        artifacts = summary.get("result", {}).get("artifacts", [])
+        artifact = next(
+            (a for a in artifacts if a["id"] == artifact_id or a["path"].endswith(artifact_id)),
+            None,
+        )
+        if not artifact:
+            return None
+
+        path = Path(artifact["path"])
+        if not path.exists():
+            return None
+
+        return {
+            "artifact": artifact,
+            "content": path.read_text(encoding="utf-8"),
+        }
+
     def _mission_id(self) -> str:
         return f"py-mission-{uuid.uuid4().hex[:12]}"
