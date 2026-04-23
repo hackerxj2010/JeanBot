@@ -14,6 +14,7 @@ import {
   loadPlatformConfig
 } from "@jeanbot/platform";
 import { PolicyService } from "@jeanbot/policy-service";
+import { redactSecrets, sanitizeData } from "@jeanbot/security";
 import type {
   ServiceHealth,
   TerminalBackgroundJobRecord,
@@ -103,13 +104,16 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\b(curl|wget|fetch)\b.*\s+\|\s*\b(bash|sh|zsh)\b/i,
+      /\/etc\/(passwd|shadow|group|gshadow|sudoers)\b/i,
+      /\b(chmod|chown|chgrp)\b.*\b\/etc\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
@@ -162,11 +166,13 @@ export class TerminalService {
       open(stderrPath, "w").then((handle) => handle.writeFile(stderr, "utf8").finally(() => handle.close()))
     ]);
 
+    const preview = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400);
+
     return {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(preview)
     };
   }
 
@@ -233,7 +239,7 @@ export class TerminalService {
     actor: string,
     details: Record<string, unknown>
   ) {
-    await this.auditService.record(kind, entityId, actor, details);
+    await this.auditService.record(kind, entityId, actor, sanitizeData(details));
   }
 
   async run(input: TerminalRunRequest) {
