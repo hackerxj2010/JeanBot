@@ -44,4 +44,33 @@ describe("TerminalService", () => {
     const watches = await service.listWatches(workspaceId);
     expect(watches.some((record) => record.cwd === cwd)).toBe(true);
   });
+
+  it("redacts secrets in outputPreview", async () => {
+    const service = new TerminalService();
+    const workspaceId = `terminal-workspace-redact-${Date.now()}`;
+    const cwd = path.resolve(".");
+
+    const execution = await service.run({
+      workspaceId,
+      command: "echo sk-ant-at01-abcdefghijklmnopqrstuvwxyz0123456789-abcdefgh",
+      cwd,
+      requestedBy: "terminal-test"
+    });
+
+    expect(execution.record.outputPreview).toContain("[REDACTED_ANTHROPIC_KEY]");
+    expect(execution.record.outputPreview).not.toContain("sk-ant-at01");
+  });
+
+  it("blocks unsafe commands", async () => {
+    const service = new TerminalService();
+    const workspaceId = `terminal-workspace-unsafe-${Date.now()}`;
+    const cwd = path.resolve(".");
+
+    await expect(service.run({
+      workspaceId,
+      command: "cat /etc/passwd",
+      cwd,
+      requestedBy: "terminal-test"
+    })).rejects.toThrow("Blocked terminal command pattern");
+  });
 });
