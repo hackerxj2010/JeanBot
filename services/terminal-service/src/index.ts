@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
+import { redactSecrets, sanitizeData } from "@jeanbot/security";
 import {
   assertInternalRequest,
   authContextFromHeaders,
@@ -109,7 +110,11 @@ export class TerminalService {
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\|\s*(?:bash|sh|zsh|curl|wget)\b/i,
+      />\s*\/etc\//i,
+      /\bcat\s+\/etc\/passwd\b/i,
+      /\bcat\s+\/etc\/shadow\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
@@ -166,7 +171,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n")
+      ).slice(0, 400)
     };
   }
 
@@ -233,7 +240,7 @@ export class TerminalService {
     actor: string,
     details: Record<string, unknown>
   ) {
-    await this.auditService.record(kind, entityId, actor, details);
+    await this.auditService.record(kind, entityId, actor, sanitizeData(details) as Record<string, unknown>);
   }
 
   async run(input: TerminalRunRequest) {

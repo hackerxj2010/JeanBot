@@ -32,10 +32,36 @@ export const riskFromText = (text: string): RiskLevel => {
 
 export const redactSecrets = (input: string) => {
   return input
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
+    .replace(/\bsk-ant-[A-Za-z0-9_-]+\b/g, "[REDACTED_ANTHROPIC_KEY]")
+    .replace(/\bsk-[A-Za-z0-9_-]+\b/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bAIza[A-Za-z0-9_-]+\b/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/\bsk_(?:live|test|restricted)_[A-Za-z0-9_-]+\b/g, "[REDACTED_STRIPE_KEY]")
+    .replace(/\bgh[po]_[A-Za-z0-9]{36}\b/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/\bBearer\s+[A-Za-z0-9._-]+\b/g, "Bearer [REDACTED_TOKEN]");
 };
+
+/**
+ * Recursively redacts secrets from objects, arrays, and strings.
+ */
+export function sanitizeData(data: unknown): unknown {
+  if (typeof data === "string") {
+    return redactSecrets(data);
+  }
+  if (Array.isArray(data)) {
+    return data.map(sanitizeData);
+  }
+  if (data !== null && typeof data === "object") {
+    if (data instanceof Date) {
+      return data;
+    }
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      sanitized[key] = sanitizeData(value);
+    }
+    return sanitized;
+  }
+  return data;
+}
 
 export const ensureLeastPrivilege = (
   tool: ToolDescriptor,
