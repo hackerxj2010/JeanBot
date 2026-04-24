@@ -103,13 +103,18 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\|\s*bash\b/i,
+      /\|\s*sh\b/i,
+      />\s*\/etc\//i,
+      /\bcat\s+\/etc\/passwd\b/i,
+      /\bcurl\s+.*\b\|\s*bash\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {

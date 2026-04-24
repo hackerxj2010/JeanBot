@@ -32,8 +32,12 @@ export const riskFromText = (text: string): RiskLevel => {
 
 export const redactSecrets = (input: string) => {
   return input
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/\bsk-ant-[A-Za-z0-9_-]{48,}\b/g, "[REDACTED_ANTHROPIC_KEY]")
+    .replace(/\bsk-[A-Za-z0-9_-]{32,}\b/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/\bAIza[0-9A-Za-z-_]{35}\b/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/\bsk_(?:live|test|restricted)_[A-Za-z0-9_]{24,}\b/g, "[REDACTED_STRIPE_KEY]")
+    .replace(/\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{36}\b/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/\bjean_[a-z0-9]{32,}\b/g, "[REDACTED_JEANBOT_KEY]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
 };
 
