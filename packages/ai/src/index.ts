@@ -13,10 +13,12 @@ const MAX_RETRIES = 2;
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  // Using Node 22 single-shot hash for better performance
+  crypto.hash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  // Using Node 22 single-shot hash for better performance
+  const digest = crypto.hash("sha256", `${seed}:${index}`, "buffer");
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +26,48 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+
+  // Use for loop and pre-allocated array instead of Array.from for better performance
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Math.round is significantly faster than toFixed which involves string conversion
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
+
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  // Use for loop for better performance in tight loops
+  let sum = 0;
+  for (let index = 0; index < length; index++) {
+    const val = values[index] as number;
+    sum += val * val;
+  }
+  const magnitude = Math.sqrt(sum);
+
   if (magnitude === 0) {
-    return values.map(() => 0);
+    const result = new Array(length);
+    for (let index = 0; index < length; index++) {
+      result[index] = 0;
+    }
+    return result;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  // Multiply by inverse instead of dividing for better performance
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(length);
+  for (let index = 0; index < length; index++) {
+    // Math.round is significantly faster than toFixed which involves string conversion
+    result[index] = Math.round(((values[index] as number) * invMagnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
