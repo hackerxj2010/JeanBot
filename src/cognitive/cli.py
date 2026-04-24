@@ -36,6 +36,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# ANSI color constants
+CLR_RESET = "\033[0m"
+CLR_BLUE = "\033[94m"
+CLR_GREEN = "\033[92m"
+CLR_YELLOW = "\033[93m"
+CLR_RED = "\033[91m"
+CLR_CYAN = "\033[96m"
+CLR_BOLD = "\033[1m"
+
+
 async def run_shell(args: argparse.Namespace):
     try:
         import readline  # Enable history and line editing
@@ -48,12 +58,12 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    current_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
 
     while True:
         try:
-            line = input("\njeanbot> ").strip()
+            line = input(f"\n{CLR_CYAN}{CLR_BOLD}jeanbot>{CLR_RESET} ").strip()
             if not line:
                 continue
             if line.lower() in ("exit", "quit"):
@@ -62,12 +72,17 @@ async def run_shell(args: argparse.Namespace):
             history.append(line)
 
             if line.lower() == "help":
-                print("Commands:")
-                print("  help              Show this help")
-                print("  history           Show command history")
-                print("  exit | quit       Exit shell")
-                print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
+                print(f"{CLR_BOLD}Commands:{CLR_RESET}")
+                print(f"  {CLR_GREEN}help{CLR_RESET}              Show this help")
+                print(f"  {CLR_GREEN}history{CLR_RESET}           Show command history")
+                print(f"  {CLR_GREEN}status{CLR_RESET}            Show current mission progress")
+                print(f"  {CLR_GREEN}artifacts{CLR_RESET}         List mission artifacts")
+                print(f"  {CLR_GREEN}view <path|id>{CLR_RESET}    View artifact content")
+                print(f"  {CLR_GREEN}exit | quit{CLR_RESET}       Exit shell")
+                print(f"  {CLR_GREEN}<objective>{CLR_RESET}       Plan and execute a mission")
+                print(
+                    f"  {CLR_GREEN}refine <feedback>{CLR_RESET} Refine the last mission result with feedback"
+                )
                 continue
 
             if line.lower() == "history":
@@ -75,10 +90,75 @@ async def run_shell(args: argparse.Namespace):
                     print(f"  {i:3}  {cmd}")
                 continue
 
+            if line.lower() == "status":
+                summary = await service.get_mission_run_summary(current_mission_id)
+                if not summary:
+                    print(f"{CLR_YELLOW}No active mission found.{CLR_RESET}")
+                else:
+                    res = summary.get("result", {})
+                    print(f"{CLR_BOLD}Mission Status: {res.get('status', 'unknown')}{CLR_RESET}")
+                    print(f"Summary: {res.get('verification_summary', 'N/A')}")
+                    print(f"Steps: {len(res.get('step_reports', []))}")
+                    for step in res.get("step_reports", []):
+                        print(f"  - {step['step_id']}: {step['summary']}")
+                continue
+
+            if line.lower() == "artifacts":
+                summary = await service.get_mission_run_summary(current_mission_id)
+                if not summary or not summary.get("result", {}).get("artifacts"):
+                    print(f"{CLR_YELLOW}No artifacts found.{CLR_RESET}")
+                else:
+                    for i, art in enumerate(summary["result"]["artifacts"]):
+                        print(f"  {i:2} [{art['kind']}] {art['title']} -> {art['path']}")
+                continue
+
+            if line.lower().startswith("view "):
+                target = line[5:].strip()
+                summary = await service.get_mission_run_summary(current_mission_id)
+                found_path = None
+                if summary and summary.get("result", {}).get("artifacts"):
+                    for art in summary["result"]["artifacts"]:
+                        if art["id"] == target or art["path"].endswith(target):
+                            found_path = art["path"]
+                            break
+                if not found_path and Path(target).exists():
+                    found_path = target
+
+                if found_path:
+                    print(f"{CLR_BLUE}--- Content of {found_path} ---{CLR_RESET}")
+                    print(Path(found_path).read_text(encoding="utf-8"))
+                    print(f"{CLR_BLUE}--- End of content ---{CLR_RESET}")
+                else:
+                    print(f"{CLR_RED}Artifact or file not found: {target}{CLR_RESET}")
+                continue
+
             if line.lower().startswith("refine "):
                 if not last_result:
-                    print("Nothing to refine. Run a mission first.")
+                    # Try to restore from disk
+                    summary = await service.get_mission_run_summary(current_mission_id)
+                    if summary and summary.get("result"):
+                        res = summary["result"]
+                        from .executor import MissionRunResult, StepExecutionRecord, MissionArtifact
+                        last_result = MissionRunResult(
+                            mission_id=res["mission_id"],
+                            status=res["status"],
+                            execution_mode=res["execution_mode"],
+                            verification_summary=res["verification_summary"],
+                            outputs=res["outputs"],
+                            memory_updates=res["memory_updates"],
+                            step_reports=[StepExecutionRecord(**r) for r in res["step_reports"]],
+                            artifacts=[MissionArtifact(**a) for a in res["artifacts"]],
+                            metrics=res["metrics"],
+                            gaps=res["gaps"],
+                            decision_log=res["decision_log"],
+                            started_at=res["started_at"],
+                            finished_at=res["finished_at"],
+                        )
+
+                if not last_result:
+                    print(f"{CLR_RED}Nothing to refine. Run a mission first.{CLR_RESET}")
                     continue
+
                 feedback = line[7:].strip()
                 objective = (
                     f"Refine previous mission results based on: {feedback}\n"
@@ -89,23 +169,27 @@ async def run_shell(args: argparse.Namespace):
                 objective = line
                 title = f"Mission: {line[:30]}..."
 
+            if not line.lower().startswith("refine "):
+                # Generate new ID for new missions
+                current_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+
             payload = {
-                "mission_id": mission_id,
+                "mission_id": current_mission_id,
                 "workspace_id": args.workspace_id,
                 "title": title,
                 "objective": objective,
                 "mode": args.mode,
             }
 
-            print(f"Executing: {title}")
+            print(f"{CLR_BOLD}Executing:{CLR_RESET} {CLR_CYAN}{title}{CLR_RESET}")
             last_result = await service.execute_payload(payload)
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
+            print(f"\n{CLR_BOLD}Status:{CLR_RESET} {CLR_GREEN}{last_result.status}{CLR_RESET}")
+            print(f"{CLR_BOLD}Summary:{CLR_RESET} {last_result.verification_summary}")
             if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
+                print(f"{CLR_BOLD}Artifacts: {len(last_result.artifacts)}{CLR_RESET}")
                 for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+                    print(f"  - {CLR_YELLOW}{artifact.title}{CLR_RESET}: {artifact.path}")
 
         except KeyboardInterrupt:
             print("\nInterrupt received, type 'exit' to quit.")

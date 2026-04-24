@@ -37,8 +37,20 @@ def stable_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def asdict_fallback(obj: Any) -> Any:
+    if hasattr(obj, "__dict__"):
+        return {k: asdict_fallback(v) for k, v in obj.__dict__.items()}
+    if isinstance(obj, (list, tuple)):
+        return [asdict_fallback(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: asdict_fallback(v) for k, v in obj.items()}
+    if isinstance(obj, Path):
+        return str(obj)
+    return obj
+
+
 def utc_json(value: Any) -> str:
-    return json.dumps(value, indent=2, sort_keys=True)
+    return json.dumps(value, default=asdict_fallback, indent=2, sort_keys=True)
 
 
 @dataclass
