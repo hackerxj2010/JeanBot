@@ -30,11 +30,33 @@ export const riskFromText = (text: string): RiskLevel => {
   return "low";
 };
 
-export const redactSecrets = (input: string) => {
+export const redactSecrets = (input: string): string => {
   return input
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
+    .replace(/(?<![\w-])sk-ant-[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_ANTHROPIC_KEY]")
+    .replace(/(?<![\w-])sk-[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/(?<![\w-])AIza[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/(?<![\w-])jean_[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_JEANBOT_KEY]")
+    .replace(/(?<![\w-])Bearer\s+[A-Za-z0-9._-]+(?![\w-])/g, "Bearer [REDACTED_TOKEN]");
+};
+
+export const sanitizeData = <T>(data: T): T => {
+  if (typeof data === "string") {
+    return redactSecrets(data) as T;
+  }
+  if (Array.isArray(data)) {
+    return data.map(sanitizeData) as T;
+  }
+  if (data !== null && typeof data === "object") {
+    if (data instanceof Date) {
+      return new Date(data.getTime()) as T;
+    }
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      result[key] = sanitizeData(value);
+    }
+    return result as T;
+  }
+  return data;
 };
 
 export const ensureLeastPrivilege = (
