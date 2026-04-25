@@ -13,7 +13,7 @@ const MAX_RETRIES = 2;
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  crypto.hash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
   const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
@@ -24,26 +24,37 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index += 1) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sum = 0;
+  for (let index = 0; index < length; index += 1) {
+    const val = values[index] as number;
+    sum += val * val;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sum);
+  if (magnitude === 0) {
+    return new Array(length).fill(0);
+  }
+
+  const invMagnitude = 1 / magnitude;
+  const results = new Array(length);
+  for (let index = 0; index < length; index += 1) {
+    results[index] = Math.round(((values[index] as number) * invMagnitude) * 1e8) / 1e8;
+  }
+  return results;
 };
 
 const toEmbeddingVectorRecord = (

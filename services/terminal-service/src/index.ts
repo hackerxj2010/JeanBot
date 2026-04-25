@@ -5,6 +5,7 @@ import path from "node:path";
 import chokidar, { type FSWatcher } from "chokidar";
 import Fastify from "fastify";
 
+import { redactSecrets, sanitizeData } from "@jeanbot/security";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
@@ -103,13 +104,16 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\|\s*(?:bash|sh|curl|wget)\b/i,
+      />\s*(?:bash|sh|curl|wget)\b/i,
+      /\/(?:etc\/passwd|etc\/shadow|etc\/sudoers)\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
@@ -166,7 +170,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      )
     };
   }
 
@@ -272,7 +278,7 @@ export class TerminalService {
 
       await Promise.all([
         this.persistExecution(finished),
-        this.appendAudit("terminal.command.executed", finished.id, actor, {
+        this.appendAudit("terminal.command.executed", finished.id, actor, sanitizeData({
           workspaceId: finished.workspaceId,
           command: finished.command,
           cwd: finished.cwd,
@@ -280,7 +286,7 @@ export class TerminalService {
           exitCode: finished.exitCode,
           status: finished.status,
           approvalRequired: finished.approvalRequired
-        })
+        }))
       ]);
 
       return {
@@ -302,7 +308,7 @@ export class TerminalService {
 
       await Promise.all([
         this.persistExecution(failed),
-        this.appendAudit("terminal.command.failed", failed.id, actor, {
+        this.appendAudit("terminal.command.failed", failed.id, actor, sanitizeData({
           workspaceId: failed.workspaceId,
           command: failed.command,
           cwd: failed.cwd,
@@ -310,7 +316,7 @@ export class TerminalService {
           status: failed.status,
           error: failed.error,
           approvalRequired: failed.approvalRequired
-        })
+        }))
       ]);
 
       return {
