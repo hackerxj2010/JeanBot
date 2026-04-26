@@ -1,0 +1,3 @@
+## 2026-04-26 - Optimized Vector Operations and Hashing
+**Learning:** Replacing `Number(val.toFixed(8))` with `Math.round(val * 1e8) / 1e8` provides a significant performance boost in tight loops by avoiding expensive string conversions. Additionally, using the Node 22+ single-shot `crypto.hash()` is more efficient than the streaming `createHash()` API for small payloads like content hashes and seeds.
+**Action:** Always prefer `Math.round()` based rounding for fixed-precision math in performance-critical paths, and leverage Node 22+ native single-shot hashing for better performance and cleaner code.
