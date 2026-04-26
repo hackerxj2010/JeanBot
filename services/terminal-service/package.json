@@ -9,6 +9,7 @@
     "@jeanbot/logger": "workspace:*",
     "@jeanbot/platform": "workspace:*",
     "@jeanbot/policy-service": "workspace:*",
+    "@jeanbot/security": "workspace:*",
     "@jeanbot/types": "workspace:*",
     "chokidar": "^4.0.3",
     "fastify": "^5.6.1",

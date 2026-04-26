@@ -14,6 +14,7 @@ import {
   loadPlatformConfig
 } from "@jeanbot/platform";
 import { PolicyService } from "@jeanbot/policy-service";
+import { redactSecrets } from "@jeanbot/security";
 import type {
   ServiceHealth,
   TerminalBackgroundJobRecord,
@@ -103,7 +104,7 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
@@ -162,11 +163,12 @@ export class TerminalService {
       open(stderrPath, "w").then((handle) => handle.writeFile(stderr, "utf8").finally(() => handle.close()))
     ]);
 
+    const rawPreview = [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400);
     return {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(rawPreview)
     };
   }
 
