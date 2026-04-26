@@ -8,10 +8,23 @@ const criticalTerms = [
   "payment",
   "production",
   "invoice",
-  "email send"
+  "email send",
+  "destroy",
+  "wipe",
+  "truncate",
+  "drop table"
 ] as const;
 
-const highTerms = ["deploy", "publish", "backup", "restore", "credentials"] as const;
+const highTerms = [
+  "deploy",
+  "publish",
+  "backup",
+  "restore",
+  "credentials",
+  "secret",
+  "token",
+  "password"
+] as const;
 
 export const riskFromText = (text: string): RiskLevel => {
   const normalized = text.toLowerCase();
@@ -31,10 +44,41 @@ export const riskFromText = (text: string): RiskLevel => {
 };
 
 export const redactSecrets = (input: string) => {
+  if (!input) {
+    return input;
+  }
   return input
-    .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
-    .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
+    .replace(/(?<![\w-])sk-ant-[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_ANTHROPIC_KEY]")
+    .replace(/(?<![\w-])sk-[A-Za-z0-9_-]{20,}(?![\w-])/g, "[REDACTED_OPENAI_KEY]")
+    .replace(/(?<![\w-])AIza[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_GOOGLE_KEY]")
+    .replace(/(?<![\w-])sk_(?:live|test|restricted)_[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_STRIPE_KEY]")
+    .replace(/(?<![\w-])gh[porsut]_[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_GITHUB_TOKEN]")
+    .replace(/(?<![\w-])jean_[A-Za-z0-9_-]+(?![\w-])/g, "[REDACTED_JEANBOT_KEY]")
+    .replace(/(?<![\w-])Bearer\s+[A-Za-z0-9._-]+(?![\w-])/g, "Bearer [REDACTED_TOKEN]");
+};
+
+export const sanitizeData = <T>(data: T): T => {
+  if (typeof data === "string") {
+    return redactSecrets(data) as unknown as T;
+  }
+
+  if (data instanceof Date) {
+    return new Date(data.getTime()) as unknown as T;
+  }
+
+  if (Array.isArray(data)) {
+    return data.map((item) => sanitizeData(item)) as unknown as T;
+  }
+
+  if (data !== null && typeof data === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(data)) {
+      result[key] = sanitizeData(value);
+    }
+    return result as unknown as T;
+  }
+
+  return data;
 };
 
 export const ensureLeastPrivilege = (
@@ -46,7 +90,7 @@ export const ensureLeastPrivilege = (
 
 const encryptionKey = () => {
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+  return crypto.hash("sha256", secret, "buffer");
 };
 
 export const encryptSecret = (plaintext: string) => {
