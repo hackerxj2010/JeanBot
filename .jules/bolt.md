@@ -1,0 +1,3 @@
+## 2025-05-14 - Optimized Vector and Hashing Operations in AI Package
+**Learning:** Significant performance bottlenecks were identified in vector normalization and synthetic embedding generation. Specifically, `.toFixed(8)` is extremely slow due to string conversion, and `Array.from` or `reduce`/`map` functional patterns have higher overhead than standard `for` loops in hot paths. Additionally, Node 22's `crypto.hash` is much faster than `crypto.createHash` for small, single-shot inputs.
+**Action:** Use `Math.round(val * 1e8) / 1e8` instead of `.toFixed(8)` for precision rounding. Favor `for` loops and pre-allocated arrays (`new Array(n)`) for vector math. Use `crypto.hash` where available in Node 22+ environments.
