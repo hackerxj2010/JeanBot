@@ -365,3 +365,10 @@ class MissionExecutorService:
 
     def _mission_id(self) -> str:
         return f"py-mission-{uuid.uuid4().hex[:12]}"
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        summary_path = mission_dir / "mission-run.json"
+        if not summary_path.exists():
+            return None
+        return json.loads(summary_path.read_text(encoding="utf-8"))
