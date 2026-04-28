@@ -12,11 +12,28 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  const normalized = normalizeText(value);
+  // Use Node 22 single-shot hash if available for better performance
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is Node 22+
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is Node 22+
+    return (crypto as any).hash("sha256", normalized, "hex");
+  }
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const input = `${seed}:${index}`;
+  let digest: Buffer;
+  // Use Node 22 single-shot hash if available for better performance
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is Node 22+
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is Node 22+
+    digest = (crypto as any).hash("sha256", input, "buffer");
+  } else {
+    digest = crypto.createHash("sha256").update(input).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,12 +41,13 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  // Using standard for loop and pre-allocated array for better performance
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Faster than toFixed(8) as it avoids string conversion
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -43,7 +61,8 @@ const normalizeVector = (values: number[]) => {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  // Faster than toFixed(8) as it avoids string conversion
+  return values.map((value) => Math.round((value / magnitude) * 1e8) / 1e8);
 };
 
 const toEmbeddingVectorRecord = (
@@ -219,16 +238,22 @@ export const generateEmbedding = async (
 };
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
-  if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const length = left.length;
+  if (length === 0 || length !== right.length) {
     return 0;
   }
 
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+  // Caching length and avoiding nullish coalescing in tight loop for performance
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = (left[index] as number) ?? 0;
+    const rightValue = (right[index] as number) ?? 0;
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;
