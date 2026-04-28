@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
+import { redactSecrets } from "@jeanbot/security";
 import {
   assertInternalRequest,
   authContextFromHeaders,
@@ -166,7 +167,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n")
+      ).slice(0, 400)
     };
   }
 
