@@ -710,6 +710,9 @@ importers:
       '@jeanbot/policy-service':
         specifier: workspace:*
         version: link:../policy-service
+      '@jeanbot/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@jeanbot/types':
         specifier: workspace:*
         version: link:../../packages/types
