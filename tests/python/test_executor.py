@@ -94,6 +94,29 @@ class StubFileService:
             }
         )
 
+    def __init__(self):
+        self.context_updates: list[dict] = []
+        self.artifacts: list[dict] = []
+        self.states: dict[str, dict] = {}
+
+    async def update_workspace_context(
+        self,
+        workspace_root: str,
+        mission_title: str,
+        completed_steps: list[str],
+        running_steps: list[str],
+        pending_steps: list[str],
+    ):
+        self.context_updates.append(
+            {
+                "workspace_root": workspace_root,
+                "mission_title": mission_title,
+                "completed_steps": completed_steps,
+                "running_steps": running_steps,
+                "pending_steps": pending_steps,
+            }
+        )
+
     async def write_artifact(
         self,
         workspace_root: str,
@@ -106,10 +129,10 @@ class StubFileService:
         return path
 
     async def save_mission_state(self, mission_id: str, state: dict[str, Any]):
-        pass
+        self.states[mission_id] = state
 
     async def load_mission_state(self, mission_id: str) -> dict[str, Any] | None:
-        return None
+        return self.states.get(mission_id)
 
 
 class StubPolicyService:
@@ -294,6 +317,41 @@ class MissionExecutorTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(
             any(artifact["path"].endswith("mission-report.md") for artifact in file_service.artifacts)
         )
+
+    async def test_mission_recovery_restores_step_status(self):
+        executor, _, _, _, file_service, _ = self.build_executor()
+        objective = MissionObjective(
+            id="mission-recovery",
+            title="Recovery Test",
+            objective="Do things",
+            workspace_id="ws-1",
+        )
+        plan = MissionPlan(
+            steps=[
+                MissionStep(id="s1", title="S1", description="d1", capability="research"),
+                MissionStep(id="s2", title="S2", description="d2", capability="browser", depends_on=["s1"]),
+            ]
+        )
+        record = MissionRecord(objective=objective, plan=plan)
+
+        # Pre-seed state with s1 completed
+        await file_service.save_mission_state("mission-recovery", {
+            "steps": [{"id": "s1", "status": "completed"}],
+            "decision_log": [],
+            "replan_history": [],
+            "plan_version": 1
+        })
+
+        # Execute mission
+        result = await executor.execute(record, ExecutionContext(workspace_root="tmp"))
+
+        self.assertEqual(result.status, "completed")
+        # Ensure only s2 was actually run (s1 was restored as completed)
+        # We can check step_reports in result - it only includes steps executed in THIS run
+        # Wait, the current implementation of execute clears step_reports at the start
+        # so it should only contain s2.
+        self.assertEqual(len(result.step_reports), 1)
+        self.assertEqual(result.step_reports[0].step_id, "s2")
 
     async def test_step_failure_uses_string_error_message(self):
         executor, _, _, _, _, _ = self.build_executor(fail_steps={"step-err"})
