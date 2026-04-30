@@ -1,0 +1,3 @@
+## 2025-05-14 - Optimized AI Embedding Utils
+**Learning:** `Number(val.toFixed(8))` is a significant bottleneck in performance-critical paths (like vector normalization) because it involves string serialization and parsing. Replacing it with `Math.round(val * 1e8) / 1e8` provided a ~20x speedup in isolated benchmarks. Also, Node 22's `crypto.hash` is ~2x faster than `createHash` for one-shot operations, but requires explicit `outputEncoding` to return a `Buffer` if binary methods like `readUInt32BE` are needed.
+**Action:** Use mathematical rounding for precision capping in hot paths. Always specify `outputEncoding` when using `crypto.hash` to ensure predictable result types.

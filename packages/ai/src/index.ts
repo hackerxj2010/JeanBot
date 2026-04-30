@@ -12,11 +12,29 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
+/**
+ * Performance-optimized hashing using Node 22 native crypto.hash if available.
+ * Falls back to createHash for older environments.
+ */
+const fastHash = (
+  algorithm: string,
+  data: string | Buffer,
+  outputEncoding: "hex" | "buffer" = "buffer"
+): string | Buffer => {
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+    return (crypto as any).hash(algorithm, data, outputEncoding);
+  }
+  const hash = crypto.createHash(algorithm).update(data);
+  return outputEncoding === "buffer" ? hash.digest() : hash.digest("hex");
+};
+
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  fastHash("sha256", normalizeText(value), "hex") as string;
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const digest = fastHash("sha256", `${seed}:${index}`, "buffer") as Buffer;
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +42,42 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+
+  // Performance: Use pre-allocated array and for loop instead of Array.from
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Performance: Math.round is significantly faster than toFixed for precision capping
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
+
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const len = values.length;
+  if (len === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sumOfSquares = 0;
+  for (let i = 0; i < len; i++) {
+    const val = values[i] as number;
+    sumOfSquares += val * val;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sumOfSquares);
+  if (magnitude === 0) {
+    return new Array(len).fill(0);
+  }
+
+  const result = new Array(len);
+  for (let i = 0; i < len; i++) {
+    // Performance: Math.round is significantly faster than toFixed for precision capping
+    result[i] = Math.round(((values[i] as number) / magnitude) * 1e8) / 1e8;
+  }
+
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -219,16 +253,22 @@ export const generateEmbedding = async (
 };
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
-  if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
+  if (!left || !right) {
+    return 0;
+  }
+
+  const len = left.length;
+  if (len === 0 || len !== right.length) {
     return 0;
   }
 
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+  for (let index = 0; index < len; index += 1) {
+    // Performance: Explicit cast is faster than nullish coalescing in tight loops
+    const leftValue = left[index] as number;
+    const rightValue = right[index] as number;
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;
