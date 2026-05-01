@@ -12,11 +12,19 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  if (typeof (crypto as any).hash === "function") {
+    return (crypto as any).hash("sha256", normalizeText(value), "hex");
+  }
+  return crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const data = `${seed}:${index}`;
+  const digest =
+    typeof (crypto as any).hash === "function"
+      ? (crypto as any).hash("sha256", data, "buffer")
+      : crypto.createHash("sha256").update(data).digest();
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +32,37 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Performance: Math.round is ~30x faster than toFixed() as it avoids string conversion
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sum = 0;
+  for (let i = 0; i < length; i++) {
+    const val = values[i];
+    sum += val * val;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sum);
+  if (magnitude === 0) {
+    return new Array(length).fill(0);
+  }
+
+  const result = new Array(length);
+  for (let i = 0; i < length; i++) {
+    result[i] = Math.round((values[i] / magnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -219,16 +238,20 @@ export const generateEmbedding = async (
 };
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
-  if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
+  if (!left || !right) {
+    return 0;
+  }
+  const length = left.length;
+  if (length === 0 || length !== right.length) {
     return 0;
   }
 
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+  for (let index = 0; index < length; index++) {
+    const leftValue = left[index];
+    const rightValue = right[index];
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;

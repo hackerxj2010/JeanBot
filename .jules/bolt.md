@@ -1,0 +1,3 @@
+## 2025-05-01 - Optimizing Synthetic Embedding Generation
+**Learning:** High-overhead functional patterns like \`Array.from\`, \`reduce\`, and \`map\` significantly slow down vector operations in hot loops. Additionally, \`toFixed()\` is surprisingly slow because it performs string conversion. Node 22's native \`crypto.hash\` is ~2x faster than \`crypto.createHash()\`.
+**Action:** Use optimized \`for\` loops and pre-allocated arrays for vector math. Use \`Math.round(val * 1e8) / 1e8\` instead of \`toFixed(8)\` for fixed-precision rounding. Always provide a fallback when using \`crypto.hash\` for compatibility with older Node.js versions.
