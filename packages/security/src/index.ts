@@ -46,6 +46,11 @@ export const ensureLeastPrivilege = (
 
 const encryptionKey = () => {
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+    return (crypto as any).hash("sha256", secret, "buffer");
+  }
   return crypto.createHash("sha256").update(secret).digest();
 };
 
