@@ -14,6 +14,7 @@ import {
   loadPlatformConfig
 } from "@jeanbot/platform";
 import { PolicyService } from "@jeanbot/policy-service";
+import { redactSecrets } from "@jeanbot/security";
 import type {
   ServiceHealth,
   TerminalBackgroundJobRecord,
@@ -103,13 +104,16 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\|\s*(?:bash|sh|zsh|curl|wget)\b/i,
+      />\s*(?:bash|sh|zsh)\b/i,
+      /\/(?:etc\/(?:passwd|shadow|sudoers))\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
@@ -166,7 +170,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      )
     };
   }
 
