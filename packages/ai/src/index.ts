@@ -12,11 +12,22 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+  if (typeof (crypto as any).hash === "function") {
+    return (crypto as any).hash("sha256", normalizeText(value), "hex");
+  }
+  return crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  let digest: Buffer;
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+  if (typeof (crypto as any).hash === "function") {
+    digest = (crypto as any).hash("sha256", `${seed}:${index}`, "buffer");
+  } else {
+    digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,12 +35,11 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
-    const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+  const values = new Array(dimensions);
+  for (let i = 0; i < dimensions; i++) {
+    const centered = seededUnitValue(hash, i) * 2 - 1;
+    values[i] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -38,12 +48,20 @@ const normalizeVector = (values: number[]) => {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sumSq = 0;
+  for (let i = 0; i < values.length; i++) {
+    sumSq += values[i] * values[i];
+  }
+  const magnitude = Math.sqrt(sumSq);
   if (magnitude === 0) {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const result = new Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    result[i] = Math.round((values[i] / magnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -52,7 +70,7 @@ const toEmbeddingVectorRecord = (
   provider: EmbeddingProvider,
   model: string
 ): EmbeddingVectorRecord => ({
-  values: normalizeVector(values),
+  values, // already normalized in syntheticVector or from API
   dimensions: values.length,
   provider,
   model,
@@ -224,21 +242,22 @@ export const cosineSimilarity = (left: number[] | undefined, right: number[] | u
   }
 
   let dot = 0;
-  let leftMagnitude = 0;
-  let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
+  let leftMagnitudeSq = 0;
+  let rightMagnitudeSq = 0;
+  const len = left.length;
+  for (let index = 0; index < len; index += 1) {
     const leftValue = left[index] ?? 0;
     const rightValue = right[index] ?? 0;
     dot += leftValue * rightValue;
-    leftMagnitude += leftValue * leftValue;
-    rightMagnitude += rightValue * rightValue;
+    leftMagnitudeSq += leftValue * leftValue;
+    rightMagnitudeSq += rightValue * rightValue;
   }
 
-  if (leftMagnitude === 0 || rightMagnitude === 0) {
+  if (leftMagnitudeSq === 0 || rightMagnitudeSq === 0) {
     return 0;
   }
 
-  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
+  return dot / (Math.sqrt(leftMagnitudeSq) * Math.sqrt(rightMagnitudeSq));
 };
 
 export const normalizeEmbeddingText = normalizeText;
