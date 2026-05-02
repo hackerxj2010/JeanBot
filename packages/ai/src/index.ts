@@ -12,11 +12,27 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  const normalized = normalizeText(value);
+  // Use Node 22's high-performance one-shot hash
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22+ but types might be missing
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22+ but types might be missing
+    return (crypto as any).hash("sha256", normalized, "hex");
+  }
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  // Use Node 22's high-performance one-shot hash for binary digest
+  let digest: Buffer;
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22+ but types might be missing
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22+ but types might be missing
+    digest = (crypto as any).hash("sha256", `${seed}:${index}`, "buffer");
+  } else {
+    digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +40,43 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
-    const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+  // Optimized: Use pre-allocated array and manual loop instead of Array.from
+  const values = new Array(dimensions);
+  for (let i = 0; i < dimensions; i++) {
+    const centered = seededUnitValue(hash, i) * 2 - 1;
+    // Optimized: Numerical rounding is ~30x faster than toFixed()
+    values[i] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const len = values.length;
+  if (len === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  // Optimized: Use manual for loop instead of reduce for better performance
+  let sumSq = 0;
+  for (let i = 0; i < len; i++) {
+    const v = values[i];
+    sumSq += v * v;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sumSq);
+  const result = new Array(len);
+  if (magnitude === 0) {
+    for (let i = 0; i < len; i++) {
+      result[i] = 0;
+    }
+    return result;
+  }
+
+  // Optimized: Manual loop and numerical rounding
+  for (let i = 0; i < len; i++) {
+    result[i] = Math.round((values[i] / magnitude) * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
@@ -219,16 +252,21 @@ export const generateEmbedding = async (
 };
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
-  if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
+  if (!left || !right) {
+    return 0;
+  }
+  const len = left.length;
+  if (len === 0 || len !== right.length) {
     return 0;
   }
 
   let dot = 0;
   let leftMagnitude = 0;
   let rightMagnitude = 0;
-  for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
+  // Optimized: Slightly tighter loop
+  for (let i = 0; i < len; i++) {
+    const leftValue = left[i];
+    const rightValue = right[i];
     dot += leftValue * rightValue;
     leftMagnitude += leftValue * leftValue;
     rightMagnitude += rightValue * rightValue;

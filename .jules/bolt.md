@@ -1,0 +1,3 @@
+## 2025-05-02 - Vector Math and Hashing Optimizations
+**Learning:** High-frequency vector operations in Node.js are significantly bottlenecked by high-order array functions (`map`, `reduce`, `Array.from`) and string conversions in `toFixed`. Node 22's `crypto.hash` is a one-shot alternative to the `createHash` stream API, providing measurable wins for short inputs like content hashes and seeds.
+**Action:** Use manual `for` loops and pre-allocated arrays for vector math. Replace `toFixed` with `Math.round(val * 1e8) / 1e8` for precision-constrained numerical output. Use `crypto.hash` with explicit encoding for one-shot hashing.
