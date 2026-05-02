@@ -8,6 +8,7 @@ import Fastify from "fastify";
 import { AuditService } from "@jeanbot/audit-service";
 import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
 import { createLogger } from "@jeanbot/logger";
+import { redactSecrets } from "@jeanbot/security";
 import {
   assertInternalRequest,
   authContextFromHeaders,
@@ -103,13 +104,16 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /\brm\s+-rf\s+\//i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
       /\bdel\s+\/f\s+\/s\s+\/q\b/i,
       /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /\bdiskpart\b/i,
+      /\|\s*(bash|sh|zsh|python|perl|node|wget|curl)\b/i,
+      />\s*(bash|sh|zsh|python|perl|node)\b/i,
+      /\/(etc\/(passwd|shadow|sudoers|group|hosts)|proc\/self\/environ)\b/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
@@ -166,7 +170,9 @@ export class TerminalService {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      outputPreview: redactSecrets(
+        [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
+      )
     };
   }
 
