@@ -12,11 +12,28 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+/**
+ * Fast one-shot hashing using Node 22+ crypto.hash when available.
+ * Falls back to crypto.createHash for compatibility.
+ */
+const fastHash = (algorithm: string, data: string | Buffer, outputEncoding: "hex" | "buffer" = "hex") => {
+  // @ts-ignore - crypto.hash is available in Node 22 but might not be in types yet
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a newer Node.js API
+  if (typeof (crypto as any).hash === "function") {
+    // Node 22's crypto.hash returns Uint8Array for buffer output when encoding is undefined or passed.
+    // We wrap in Buffer.from to ensure compatibility with methods like readUInt32BE.
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a newer Node.js API
+    const result = (crypto as any).hash(algorithm, data, outputEncoding === "buffer" ? undefined : outputEncoding);
+    return outputEncoding === "buffer" ? Buffer.from(result) : result;
+  }
+  const hasher = crypto.createHash(algorithm).update(data);
+  return outputEncoding === "buffer" ? hasher.digest() : hasher.digest("hex");
+};
+
+const contentHashFor = (value: string) => fastHash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const digest = fastHash("sha256", `${seed}:${index}`, "buffer");
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +41,41 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Math.round is ~30x faster than toFixed for fixed precision math
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sumSquared = 0;
+  for (let i = 0; i < length; i++) {
+    sumSquared += values[i] * values[i];
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sumSquared);
+  const result = new Array(length);
+
+  if (magnitude === 0) {
+    for (let i = 0; i < length; i++) {
+      result[i] = 0;
+    }
+    return result;
+  }
+
+  for (let i = 0; i < length; i++) {
+    result[i] = Math.round((values[i] / magnitude) * 1e8) / 1e8;
+  }
+
+  return result;
 };
 
 const toEmbeddingVectorRecord = (

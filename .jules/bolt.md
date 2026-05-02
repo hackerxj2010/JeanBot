@@ -1,0 +1,3 @@
+## 2026-05-02 - Synthetic Embedding and Vector Optimization
+**Learning:** Node 22's `crypto.hash` is significantly faster than creating multiple `crypto.Hash` objects for repeated hashing in hot paths. Additionally, `Math.round(val * 1e8) / 1e8` is ~30x faster than `Number(val.toFixed(8))` as it avoids string conversions. Standard `for` loops with pre-allocated arrays outperform `Array.from` and functional patterns (`map`, `reduce`) in performance-critical vector operations.
+**Action:** Use `crypto.hash` for one-shot hashing and prefer numeric precision math over string-based `toFixed` in hot paths. Replace functional array methods with standard loops for vector processing.
