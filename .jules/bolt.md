@@ -1,0 +1,3 @@
+## 2026-05-03 - High-Performance Synthetic Embedding Generation
+**Learning:** In Node.js 22, the new `crypto.hash` one-shot API is significantly faster than the traditional `crypto.createHash` flow for small inputs like content hashes and seeds. Additionally, avoiding string conversions by replacing `toFixed(8)` with `Math.round(val * 1e8) / 1e8` and using standard `for` loops with pre-allocated arrays provides a massive speedup in vector operations.
+**Action:** Always favor one-shot hashing and numeric-only math in hot paths (like embedding generation). Use `for` loops instead of functional patterns (`map`, `reduce`, `Array.from`) when performance is critical.
