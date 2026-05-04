@@ -1,0 +1,3 @@
+## 2026-05-04 - High-performance Vector Operations in Node 22
+**Learning:** In performance-critical paths involving fixed-precision math (like vector normalization), `Math.round(val * 1e8) / 1e8` is significantly faster (~30x) than `Number(val.toFixed(8))` in Node.js as it avoids expensive string conversions. Additionally, Node 22's `crypto.hash` is ~2-3x faster than `crypto.createHash` for small inputs.
+**Action:** Use `Math.round` for fixed-precision math and `crypto.hash` (with appropriate fallback) for frequent hashing operations in Node 22+ environments. Favor manual `for` loops and pre-allocated arrays over functional patterns (`map`, `reduce`, `Array.from`) in hot paths.
