@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Awaitable, Protocol
 
@@ -1145,19 +1145,49 @@ class MissionExecutor:
         )
 
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
-        # Attempt to recover existing state if available
-        existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
-            print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
-
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
+
+        # Attempt to recover existing state if available
+        existing_state = await self.file_service.load_mission_state(record.objective.id)
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            started_at = existing_state.get("started_at", started_at)
+            outputs = existing_state.get("outputs", {})
+            memory_updates = existing_state.get("memory_updates", [])
+
+            for r_dict in existing_state.get("step_reports", []):
+                diag_dict = r_dict.get("diagnostics")
+                diag = StepExecutionDiagnostics(**diag_dict) if diag_dict else None
+                step_reports.append(
+                    StepExecutionRecord(
+                        step_id=r_dict["step_id"],
+                        started_at=r_dict["started_at"],
+                        attempts=r_dict.get("attempts", 1),
+                        summary=r_dict.get("summary", ""),
+                        diagnostics=diag,
+                    )
+                )
+
+            for a_dict in existing_state.get("artifacts", []):
+                artifacts.append(MissionArtifact(**a_dict))
+
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.plan_version = existing_state.get("plan_version", record.plan_version)
+
+            if record.plan:
+                completed_ids = {
+                    r.step_id
+                    for r in step_reports
+                    if r.diagnostics and r.diagnostics.failure_class == "none"
+                }
+                for step in record.plan.steps:
+                    if step.id in completed_ids:
+                        step.status = "completed"
         
         plan = self._require_plan(record)
         remaining_steps = {step.id for step in plan.steps}
@@ -1239,11 +1269,19 @@ class MissionExecutor:
             await self._update_workspace_context(record, context)
 
             # Persist state after each batch for recovery
-            await self.file_service.save_mission_state(record.objective.id, {
-                "decision_log": record.decision_log,
-                "replan_history": record.replan_history,
-                "plan_version": record.plan_version,
-            })
+            await self.file_service.save_mission_state(
+                record.objective.id,
+                {
+                    "started_at": started_at,
+                    "outputs": outputs,
+                    "memory_updates": memory_updates,
+                    "step_reports": [asdict(r) for r in step_reports],
+                    "artifacts": [asdict(a) for a in artifacts],
+                    "decision_log": record.decision_log,
+                    "replan_history": record.replan_history,
+                    "plan_version": record.plan_version,
+                },
+            )
 
             await self.audit_service.record(
                 "mission.batch.completed",
