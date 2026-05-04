@@ -1,0 +1,4 @@
+## 2026-05-04 - Terminal Guardrail Regex Bypass
+**Vulnerability:** The terminal command safety guardrail used a regex with a trailing word boundary `\b` after a forward slash `/` (e.g., `/\brm\s+-rf\s+\/\b/i`). Because `/` is a non-word character, `\b` does not behave as expected when the slash is at the end of the string or followed by a space, allowing the dangerous `rm -rf /` command to bypass the check.
+**Learning:** In JavaScript/TypeScript regex, `\b` represents a transition between a word character (`[a-zA-Z0-9_]`) and a non-word character. It does NOT work as a generic "end of pattern" marker for patterns ending in non-word characters like `/`, `.`, or `-`.
+**Prevention:** Avoid using `\b` immediately following non-word characters in security regexes. Use explicit end-of-string anchors `$` or lookaheads for whitespace/end-of-string if a boundary is needed, or simply omit the boundary if the intent is to block any path starting with that character.
