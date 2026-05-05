@@ -46,7 +46,9 @@ export const ensureLeastPrivilege = (
 
 const encryptionKey = () => {
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+  // @ts-ignore - crypto.hash is available in Node 22
+  const hashHex = crypto.hash("sha256", secret, "hex");
+  return Buffer.from(hashHex, "hex");
 };
 
 export const encryptSecret = (plaintext: string) => {
