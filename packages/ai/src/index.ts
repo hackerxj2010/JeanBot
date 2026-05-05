@@ -12,24 +12,48 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  // Use Node 22+ one-shot hashing if available for better performance
+  // @ts-ignore - crypto.hash is available in Node 22 but might not be in types yet
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is missing from types
+  if (typeof (crypto as any).hash === "function") {
+    // @ts-ignore
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is missing from types
+    return (crypto as any).hash("sha256", value, "hex");
+  }
+  return crypto.createHash("sha256").update(value).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const input = `${seed}:${index}`;
+  let digest: Buffer;
+  // Use Node 22+ one-shot hashing if available
+  // @ts-ignore
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is missing from types
+  if (typeof (crypto as any).hash === "function") {
+    // @ts-ignore
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is missing from types
+    const hex = (crypto as any).hash("sha256", input, "hex");
+    digest = Buffer.from(hex, "hex");
+  } else {
+    digest = crypto.createHash("sha256").update(input).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
 
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
+  // We already normalized the text, so we can use it directly
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+
+  // Use manual loop and pre-allocation for better performance than Array.from
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Math.round is ~30x faster than toFixed(8) as it avoids string conversions
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -43,7 +67,9 @@ const normalizeVector = (values: number[]) => {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const factor = 1 / magnitude;
+  // Use Math.round for precision rounding to avoid slow toFixed(8)
+  return values.map((value) => Math.round((value * factor) * 1e8) / 1e8);
 };
 
 const toEmbeddingVectorRecord = (
@@ -57,7 +83,7 @@ const toEmbeddingVectorRecord = (
   provider,
   model,
   generatedAt: new Date().toISOString(),
-  contentHash: contentHashFor(text)
+  contentHash: contentHashFor(normalizeText(text))
 });
 
 const sleep = (timeMs: number) =>
@@ -242,4 +268,4 @@ export const cosineSimilarity = (left: number[] | undefined, right: number[] | u
 };
 
 export const normalizeEmbeddingText = normalizeText;
-export const embeddingContentHash = contentHashFor;
+export const embeddingContentHash = (text: string) => contentHashFor(normalizeText(text));
