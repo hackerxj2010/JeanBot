@@ -58,12 +58,19 @@ class MissionExecutorService:
     mode: str = "local"
 
     def build_bundle(self, mission_payload: dict[str, Any]) -> MissionExecutionBundle:
+        m_id = mission_payload.get("id") or mission_payload.get("mission_id")
+        if m_id:
+            saved_payload_path = Path(self.workspace_root) / ".jeanbot" / "missions" / m_id / "mission-payload.json"
+            if saved_payload_path.exists():
+                saved_payload = json.loads(saved_payload_path.read_text(encoding="utf-8"))
+                mission_payload = {**saved_payload, **mission_payload}
+
         workspace_id = mission_payload.get("workspace_id") or mission_payload.get("workspaceId")
         if not workspace_id:
             raise ValueError("mission payload requires workspace_id")
 
         objective = MissionObjective(
-            id=mission_payload.get("id") or mission_payload.get("mission_id") or self._mission_id(),
+            id=m_id or self._mission_id(),
             title=mission_payload["title"],
             objective=mission_payload["objective"],
             workspace_id=workspace_id,
@@ -140,6 +147,21 @@ class MissionExecutorService:
 
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = Path(self.workspace_root) / ".jeanbot" / "missions" / mission_id
+        run_json = mission_dir / "mission-run.json"
+        payload_json = mission_dir / "mission-payload.json"
+
+        if not run_json.exists():
+            return None
+
+        summary = json.loads(run_json.read_text(encoding="utf-8"))
+        if payload_json.exists():
+            payload = json.loads(payload_json.read_text(encoding="utf-8"))
+            summary["payload_steps"] = payload.get("steps", [])
+
+        return summary
 
     def write_payload_template(self, path: str) -> str:
         payload = {

@@ -32,85 +32,233 @@ def build_parser() -> argparse.ArgumentParser:
     shell_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
     shell_parser.add_argument("--workspace-id", default="workspace-interactive", help="Workspace ID")
     shell_parser.add_argument("--mode", choices=["local", "live"], default="local", help="Execution mode")
+    shell_parser.add_argument("--mission-id", help="Resume an existing mission by ID")
 
     return parser
 
 
-async def run_shell(args: argparse.Namespace):
-    try:
-        import readline  # Enable history and line editing
-    except ImportError:
-        pass
+def render_markdown(text: str) -> str:
+    """Basic markdown to ANSI terminal output."""
+    lines = text.split("\n")
+    rendered = []
+    for line in lines:
+        if line.startswith("# "):
+            rendered.append(f"\033[1;36m{line[2:].upper()}\033[0m")
+        elif line.startswith("## "):
+            rendered.append(f"\033[1;34m{line[3:]}\033[0m")
+        elif line.startswith("### "):
+            rendered.append(f"\033[1;32m{line[4:]}\033[0m")
+        elif line.startswith("- "):
+            rendered.append(f"  • {line[2:]}")
+        elif "**" in line:
+            # Simple bold support
+            parts = line.split("**")
+            new_line = ""
+            for i, part in enumerate(parts):
+                new_line += f"\033[1m{part}\033[0m" if i % 2 == 1 else part
+            rendered.append(new_line)
+        else:
+            rendered.append(line)
+    return "\n".join(rendered)
 
-    service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
-    print(f"JeanBot interactive shell ({args.mode} mode)")
-    print(f"Workspace: {args.workspace_root} ({args.workspace_id})")
-    print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
-    last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
-    history: list[str] = []
+class InteractiveShell:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
+        self.mission_id = args.mission_id or f"shell-{uuid.uuid4().hex[:8]}"
+        self.history: list[str] = []
+        self.last_result = None
 
-    while True:
+    async def run(self):
         try:
-            line = input("\njeanbot> ").strip()
-            if not line:
-                continue
-            if line.lower() in ("exit", "quit"):
-                break
+            import readline
+        except ImportError:
+            pass
 
-            history.append(line)
+        print(f"\033[1;35mJeanBot Interactive Shell\033[0m (\033[33m{self.args.mode}\033[0m mode)")
+        print(f"Workspace: {self.args.workspace_root} ({self.args.workspace_id})")
+        print(f"Mission ID: {self.mission_id}")
+        print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
-            if line.lower() == "help":
-                print("Commands:")
-                print("  help              Show this help")
-                print("  history           Show command history")
-                print("  exit | quit       Exit shell")
-                print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
-                continue
+        # Try to load existing result if resuming
+        if self.args.mission_id:
+            summary = self.service.get_mission_run_summary(self.mission_id)
+            if summary:
+                print(f"Resumed mission: {summary.get('mission', {}).get('title', 'Untitled')}")
+                # We can't easily reconstruct the last_result object but we have enough for status
 
-            if line.lower() == "history":
-                for i, cmd in enumerate(history, 1):
-                    print(f"  {i:3}  {cmd}")
-                continue
-
-            if line.lower().startswith("refine "):
-                if not last_result:
-                    print("Nothing to refine. Run a mission first.")
+        while True:
+            try:
+                line = input("\njeanbot> ").strip()
+                if not line:
                     continue
-                feedback = line[7:].strip()
-                objective = (
-                    f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
-                )
-                title = f"Refinement: {feedback[:30]}..."
+                if line.lower() in ("exit", "quit"):
+                    break
+
+                self.history.append(line)
+
+                cmd_parts = line.split()
+                cmd = cmd_parts[0].lower()
+
+                if cmd == "help":
+                    self.show_help()
+                elif cmd == "history":
+                    self.show_history()
+                elif cmd == "plan":
+                    await self.show_plan()
+                elif cmd == "artifacts":
+                    await self.show_artifacts()
+                elif cmd == "show":
+                    await self.show_artifact_detail(cmd_parts[1:] if len(cmd_parts) > 1 else [])
+                elif cmd == "status":
+                    await self.show_status()
+                elif cmd.startswith("refine"):
+                    await self.handle_refine(line[7:].strip())
+                else:
+                    await self.handle_objective(line)
+
+            except KeyboardInterrupt:
+                print("\nInterrupt received, type 'exit' to quit.")
+            except Exception as e:
+                print(f"\n\033[1;31mError:\033[0m {e}")
+
+    def show_help(self):
+        print("\033[1mCommands:\033[0m")
+        print("  help              Show this help")
+        print("  history           Show command history")
+        print("  plan              Show current mission plan and steps")
+        print("  status            Show current mission status and metrics")
+        print("  artifacts         List mission artifacts")
+        print("  show <index|id>   View artifact content")
+        print("  refine <feedback> Refine the mission with additional feedback")
+        print("  exit | quit       Exit shell")
+        print("  <objective>       Plan and execute a new mission")
+
+    def show_history(self):
+        for i, cmd in enumerate(self.history, 1):
+            print(f"  {i:3}  {cmd}")
+
+    async def show_plan(self):
+        summary = self.service.get_mission_run_summary(self.mission_id)
+        if not summary:
+            print("No active mission plan.")
+            return
+
+        print(f"\033[1;34mPLAN: {summary['mission']['title']}\033[0m (v{summary['plan_version']})")
+        steps = summary.get("payload_steps", [])
+        for step in steps:
+            status = step.get("status", "pending")
+            color = "\033[32m" if status == "completed" else "\033[33m" if status == "running" else ""
+            print(f"  {color}[{status:9}]\033[0m {step['id']}: {step['title']}")
+
+    async def show_artifacts(self):
+        summary = self.service.get_mission_run_summary(self.mission_id)
+        if not summary:
+            print("No active mission artifacts.")
+            return
+
+        artifacts = summary.get("result", {}).get("artifacts", [])
+        if not artifacts:
+            print("No artifacts produced yet.")
+            return
+
+        print("\033[1;34mARTIFACTS:\033[0m")
+        for i, art in enumerate(artifacts):
+            print(f"  [{i}] {art['id'][:8]} :: {art['title']} ({art['kind']})")
+
+    async def show_artifact_detail(self, args: list[str]):
+        if not args:
+            print("Usage: show <index|id>")
+            return
+
+        summary = self.service.get_mission_run_summary(self.mission_id)
+        if not summary:
+            return
+
+        artifacts = summary.get("result", {}).get("artifacts", [])
+        target = None
+
+        if args[0].isdigit():
+            idx = int(args[0])
+            if 0 <= idx < len(artifacts):
+                target = artifacts[idx]
+        else:
+            target = next((a for a in artifacts if a["id"].startswith(args[0])), None)
+
+        if not target:
+            print(f"Artifact not found: {args[0]}")
+            return
+
+        path = Path(target["path"])
+        if path.exists():
+            content = path.read_text(encoding="utf-8")
+            print(f"\n\033[1;32m--- {target['title']} ---\033[0m")
+            if target["kind"] in ("log", "report"):
+                print(render_markdown(content))
             else:
-                objective = line
-                title = f"Mission: {line[:30]}..."
+                print(content)
+        else:
+            print(f"Artifact file missing: {target['path']}")
 
-            payload = {
-                "mission_id": mission_id,
-                "workspace_id": args.workspace_id,
-                "title": title,
-                "objective": objective,
-                "mode": args.mode,
-            }
+    async def show_status(self):
+        summary = self.service.get_mission_run_summary(self.mission_id)
+        if not summary:
+            print("No active mission.")
+            return
 
-            print(f"Executing: {title}")
-            last_result = await service.execute_payload(payload)
+        res = summary["result"]
+        print(f"\033[1;34mSTATUS: {res['status'].upper()}\033[0m")
+        print(f"Summary: {res['verification_summary']}")
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
-            if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
-                for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+        metrics = res.get("metrics", {})
+        if metrics:
+            print(f"Steps: {metrics.get('completed_steps')}/{metrics.get('total_steps')} completed")
+            print(f"Score: {metrics.get('average_score')}")
 
-        except KeyboardInterrupt:
-            print("\nInterrupt received, type 'exit' to quit.")
-        except Exception as e:
-            print(f"\nError: {e}")
+        gaps = res.get("gaps", [])
+        if gaps:
+            print("\033[1;31mGaps identified:\033[0m")
+            for gap in gaps:
+                print(f"  - {gap}")
+
+    async def handle_refine(self, feedback: str):
+        summary = self.service.get_mission_run_summary(self.mission_id)
+        if not summary:
+            print("Nothing to refine. Run a mission first.")
+            return
+
+        res = summary["result"]
+        objective = (
+            f"Refine previous mission results based on: {feedback}\n"
+            f"Previous summary: {res.get('verification_summary')}"
+        )
+        await self.execute_mission(f"Refinement: {feedback[:30]}...", objective)
+
+    async def handle_objective(self, objective: str):
+        await self.execute_mission(f"Mission: {objective[:30]}...", objective)
+
+    async def execute_mission(self, title: str, objective: str):
+        payload = {
+            "mission_id": self.mission_id,
+            "workspace_id": self.args.workspace_id,
+            "title": title,
+            "objective": objective,
+            "mode": self.args.mode,
+        }
+
+        print(f"\033[1;32mExecuting:\033[0m {title}")
+        self.last_result = await self.service.execute_payload(payload)
+
+        print(f"\n\033[1mStatus:\033[0m {self.last_result.status}")
+        print(f"\033[1mSummary:\033[0m {self.last_result.verification_summary}")
+        if self.last_result.artifacts:
+            print(f"\033[1mArtifacts:\033[0m {len(self.last_result.artifacts)} produced. Type 'artifacts' to list.")
+
+
+async def run_shell(args: argparse.Namespace):
+    shell = InteractiveShell(args)
+    await shell.run()
 
 
 async def run_command(args: argparse.Namespace) -> dict:
