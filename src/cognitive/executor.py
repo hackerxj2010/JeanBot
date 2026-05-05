@@ -1147,19 +1147,53 @@ class MissionExecutor:
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
         existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
-            print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
-        
+
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.plan_version = existing_state.get("plan_version")
+            started_at = existing_state.get("started_at", started_at)
+            outputs = existing_state.get("outputs", {})
+            memory_updates = existing_state.get("memory_updates", [])
+
+            # Reconstruct step reports
+            for item in existing_state.get("step_reports", []):
+                diag_item = item.get("diagnostics")
+                diagnostics = StepExecutionDiagnostics(**diag_item) if diag_item else None
+                step_reports.append(StepExecutionRecord(
+                    step_id=item["step_id"],
+                    started_at=item["started_at"],
+                    attempts=item["attempts"],
+                    summary=item["summary"],
+                    diagnostics=diagnostics
+                ))
+
+            # Reconstruct artifacts
+            for item in existing_state.get("artifacts", []):
+                artifacts.append(MissionArtifact(
+                    id=item["id"],
+                    kind=item["kind"],
+                    title=item["title"],
+                    path=item["path"],
+                    created_at=item["created_at"],
+                    metadata=item.get("metadata", {})
+                ))
+
         plan = self._require_plan(record)
+
+        # Mark recovered steps as completed
+        completed_step_ids = {r.step_id for r in step_reports if r.diagnostics and r.diagnostics.failure_class == "none"}
+        for step in plan.steps:
+            if step.id in completed_step_ids:
+                step.status = "completed"
+
         remaining_steps = {step.id for step in plan.steps}
         
         while remaining_steps:
@@ -1240,9 +1274,31 @@ class MissionExecutor:
 
             # Persist state after each batch for recovery
             await self.file_service.save_mission_state(record.objective.id, {
+                "started_at": started_at,
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "outputs": outputs,
+                "memory_updates": memory_updates,
+                "step_reports": [
+                    {
+                        "step_id": r.step_id,
+                        "started_at": r.started_at,
+                        "attempts": r.attempts,
+                        "summary": r.summary,
+                        "diagnostics": json.loads(json.dumps(r.diagnostics.__dict__)) if r.diagnostics else None
+                    } for r in step_reports
+                ],
+                "artifacts": [
+                    {
+                        "id": a.id,
+                        "kind": a.kind,
+                        "title": a.title,
+                        "path": a.path,
+                        "created_at": a.created_at,
+                        "metadata": a.metadata
+                    } for a in artifacts
+                ]
             })
 
             await self.audit_service.record(
