@@ -13,10 +13,12 @@ const MAX_RETRIES = 2;
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  // biome-ignore lint/suspicious/noExplicitAny: Node 22 crypto.hash is faster but missing from types
+  (crypto as any).hash("sha256", normalizeText(value), "hex");
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  // biome-ignore lint/suspicious/noExplicitAny: Node 22 crypto.hash is faster but missing from types
+  const digest = Buffer.from((crypto as any).hash("sha256", `${seed}:${index}`, "hex"), "hex");
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +26,38 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    // Faster precision rounding than toFixed
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sumSquares = 0;
+  for (let i = 0; i < length; i++) {
+    sumSquares += values[i] * values[i];
+  }
+
+  const magnitude = Math.sqrt(sumSquares);
   if (magnitude === 0) {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(length);
+  for (let i = 0; i < length; i++) {
+    // Faster precision rounding than toFixed
+    result[i] = Math.round(values[i] * invMagnitude * 1e8) / 1e8;
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
