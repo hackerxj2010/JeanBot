@@ -12,11 +12,24 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+    return (crypto as any).hash("sha256", normalizeText(value), "hex");
+  }
+  return crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  let digest: Buffer;
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+    digest = Buffer.from((crypto as any).hash("sha256", `${seed}:${index}`, "hex"), "hex");
+  } else {
+    digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,12 +37,11 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
@@ -43,7 +55,8 @@ const normalizeVector = (values: number[]) => {
     return values.map(() => 0);
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const invMagnitude = 1 / magnitude;
+  return values.map((value) => Math.round(value * invMagnitude * 1e8) / 1e8);
 };
 
 const toEmbeddingVectorRecord = (
