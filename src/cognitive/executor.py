@@ -1147,18 +1147,40 @@ class MissionExecutor:
     async def execute(self, record: MissionRecord, context: ExecutionContext) -> MissionRunResult:
         # Attempt to recover existing state if available
         existing_state = await self.file_service.load_mission_state(record.objective.id)
-        if existing_state:
-            print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
         step_reports: list[StepExecutionRecord] = []
         artifacts: list[MissionArtifact] = []
-        
+
+        if existing_state:
+            print(f"Resuming mission {record.objective.id} from persisted state.")
+            record.decision_log = list(existing_state.get("decision_log", []))
+            record.replan_history = list(existing_state.get("replan_history", []))
+            record.plan_version = existing_state.get("plan_version")
+
+            # Reconstruction of active state if present
+            outputs = dict(existing_state.get("outputs", {}))
+            memory_updates = list(existing_state.get("memory_updates", []))
+
+            for rep in existing_state.get("step_reports", []):
+                diag_data = rep.get("diagnostics")
+                diagnostics = StepExecutionDiagnostics(**diag_data) if diag_data else None
+                step_reports.append(StepExecutionRecord(
+                    step_id=rep["step_id"],
+                    started_at=rep["started_at"],
+                    attempts=rep.get("attempts", 1),
+                    summary=rep.get("summary", ""),
+                    diagnostics=diagnostics
+                ))
+
+            for art in existing_state.get("artifacts", []):
+                artifacts.append(MissionArtifact(**art))
+
+            if "started_at" in existing_state:
+                started_at = existing_state["started_at"]
+
         plan = self._require_plan(record)
         remaining_steps = {step.id for step in plan.steps}
         
@@ -1170,6 +1192,9 @@ class MissionExecutor:
             ready_steps = [s for s in active_plan.steps if s.status == "ready"]
             
             if not ready_steps:
+                # If all steps are completed or skipped, we are done
+                if all(s.status in ("completed", "skipped") for s in active_plan.steps):
+                    break
                 raise ValueError(
                     f'Mission "{record.objective.id}" cannot make progress because no steps are ready.'
                 )
@@ -1243,6 +1268,19 @@ class MissionExecutor:
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "outputs": outputs,
+                "memory_updates": memory_updates,
+                "step_reports": [
+                    {
+                        "step_id": r.step_id,
+                        "started_at": r.started_at,
+                        "attempts": r.attempts,
+                        "summary": r.summary,
+                        "diagnostics": vars(r.diagnostics) if r.diagnostics else None
+                    } for r in step_reports
+                ],
+                "artifacts": [vars(a) for a in artifacts],
+                "started_at": started_at
             })
 
             await self.audit_service.record(
