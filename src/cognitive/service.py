@@ -131,6 +131,18 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        run_path = mission_dir / "mission-run.json"
+        if not run_path.exists():
+            return None
+        summary = json.loads(run_path.read_text(encoding="utf-8"))
+        payload_path = mission_dir / "mission-payload.json"
+        if payload_path.exists():
+            payload = json.loads(payload_path.read_text(encoding="utf-8"))
+            summary["payload"] = payload
+        return summary
+
     async def finalize_distributed_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
         bundle.record.active_execution = self._build_active_execution(mission_payload)

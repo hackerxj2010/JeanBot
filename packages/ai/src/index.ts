@@ -12,38 +12,71 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  const normalized = normalizeText(value);
+  // @biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+  if (typeof (crypto as any).hash === "function") {
+    // @biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+    return (crypto as any).hash("sha256", normalized, "hex");
+  }
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
-  const int = digest.readUInt32BE(0);
+  let digest: Buffer | Uint8Array;
+  const input = `${seed}:${index}`;
+
+  // @biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+  if (typeof (crypto as any).hash === "function") {
+    // @biome-ignore lint/suspicious/noExplicitAny: crypto.hash is available in Node 22 but types are missing
+    digest = (crypto as any).hash("sha256", input);
+  } else {
+    digest = crypto.createHash("sha256").update(input).digest();
+  }
+
+  // Node 22 crypto.hash returns Uint8Array, which doesn't have readUInt32BE
+  // We can wrap it in a Buffer if it isn't one already.
+  const buffer = Buffer.isBuffer(digest) ? digest : Buffer.from(digest);
+  const int = buffer.readUInt32BE(0);
   return int / 0xffffffff;
 };
 
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
-    const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+  const values = new Array(dimensions);
+  for (let i = 0; i < dimensions; i++) {
+    const centered = seededUnitValue(hash, i) * 2 - 1;
+    values[i] = Math.round(centered * 1e8) / 1e8;
+  }
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const len = values.length;
+  if (len === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  let sumSq = 0;
+  for (let i = 0; i < len; i++) {
+    const v = values[i];
+    sumSq += v * v;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sumSq);
+  if (magnitude === 0) {
+    const res = new Array(len);
+    for (let i = 0; i < len; i++) res[i] = 0;
+    return res;
+  }
+
+  const invMag = 1 / magnitude;
+  const normalized = new Array(len);
+  for (let i = 0; i < len; i++) {
+    normalized[i] = Math.round(values[i] * invMag * 1e8) / 1e8;
+  }
+  return normalized;
 };
 
 const toEmbeddingVectorRecord = (

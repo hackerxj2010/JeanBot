@@ -7,7 +7,24 @@ import uuid
 from pathlib import Path
 from typing import Sequence
 
+import re
 from .service import MissionExecutorService
+
+
+def render_markdown(text: str) -> str:
+    """Basic markdown to ANSI terminal renderer."""
+    # Headers
+    text = re.sub(r"^# (.*)$", r"\033[1;34m# \1\033[0m", text, flags=re.MULTILINE)
+    text = re.sub(r"^## (.*)$", r"\033[1;36m## \1\033[0m", text, flags=re.MULTILINE)
+    text = re.sub(r"^### (.*)$", r"\033[1;32m### \1\033[0m", text, flags=re.MULTILINE)
+
+    # Bold
+    text = re.sub(r"\*\*(.*?)\*\*", r"\033[1m\1\033[0m", text)
+
+    # List items
+    text = re.sub(r"^- (.*)$", r"  • \1", text, flags=re.MULTILINE)
+
+    return text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -65,6 +82,10 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show status of the last mission")
+                print("  plan              Show the current mission plan")
+                print("  artifacts         List artifacts from the last mission")
+                print("  show <idx|id>     Show artifact content")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
@@ -75,14 +96,85 @@ async def run_shell(args: argparse.Namespace):
                     print(f"  {i:3}  {cmd}")
                 continue
 
-            if line.lower().startswith("refine "):
-                if not last_result:
-                    print("Nothing to refine. Run a mission first.")
+            if line.lower() == "status":
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary:
+                    print("No active mission status found.")
                     continue
+                res = summary.get("result", {})
+                print(f"\nStatus: {res.get('status', 'unknown')}")
+                print(f"Summary: {res.get('verification_summary', 'N/A')}")
+                continue
+
+            if line.lower() == "plan":
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary or "payload" not in summary:
+                    print("No active mission plan found.")
+                    continue
+                steps = summary["payload"].get("steps", [])
+                print(f"\nMission: {summary['payload'].get('title', 'Untitled')}")
+                for i, step in enumerate(steps, 1):
+                    status = step.get("status", "pending")
+                    print(f"  {i}. [{status}] {step.get('title')}")
+                continue
+
+            if line.lower() == "artifacts":
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary:
+                    print("No mission artifacts found.")
+                    continue
+                res = summary.get("result", {})
+                artifacts = res.get("artifacts", [])
+                if not artifacts:
+                    print("No artifacts produced yet.")
+                    continue
+                print(f"\nArtifacts ({len(artifacts)}):")
+                for i, a in enumerate(artifacts, 1):
+                    print(f"  {i:2}. {a.get('title')} ({a.get('id')[:8]})")
+                continue
+
+            if line.lower().startswith("show "):
+                summary = service.get_mission_run_summary(mission_id)
+                if not summary:
+                    print("No mission data found.")
+                    continue
+                res = summary.get("result", {})
+                artifacts = res.get("artifacts", [])
+                target = line[5:].strip()
+                artifact = None
+                if target.isdigit():
+                    idx = int(target) - 1
+                    if 0 <= idx < len(artifacts):
+                        artifact = artifacts[idx]
+                else:
+                    artifact = next((a for a in artifacts if a.get("id").startswith(target)), None)
+
+                if not artifact:
+                    print(f"Artifact '{target}' not found.")
+                    continue
+
+                path = Path(artifact.get("path"))
+                if not path.exists():
+                    print(f"Artifact file not found: {path}")
+                    continue
+
+                content = path.read_text(encoding="utf-8")
+                print(f"\n--- {artifact.get('title')} ---")
+                print(render_markdown(content))
+                continue
+
+            if line.lower().startswith("refine "):
+                summary = service.get_mission_run_summary(mission_id)
+                verification_summary = "N/A"
+                if summary:
+                    verification_summary = summary.get("result", {}).get("verification_summary", "N/A")
+                elif last_result:
+                    verification_summary = last_result.verification_summary
+
                 feedback = line[7:].strip()
                 objective = (
                     f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
+                    f"Previous summary: {verification_summary}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
             else:
