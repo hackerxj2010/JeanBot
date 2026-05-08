@@ -102,14 +102,16 @@ export class TerminalService {
   }
 
   private assertSafeCommand(command: string) {
+    // Robust boundary patterns: (?:^|[\s;&|]) and (?:[\s;&|]|$)
+    // This is safer than \b for commands that might end in / or other non-word chars.
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
-      /\bshutdown\b/i,
-      /\breboot\b/i,
-      /\bformat\b/i,
-      /\bdel\s+\/f\s+\/s\s+\/q\b/i,
-      /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /(?:^|[\s;&|])rm\s+-rf\s+\/(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])shutdown(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])reboot(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])format(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])del\s+\/f\s+\/s\s+\/q(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])mkfs(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])diskpart(?:[\s;&|]|$)/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
