@@ -236,7 +236,8 @@ export const fromServiceAuthContextHeader = (encoded?: string) => {
 };
 
 export const hashApiKey = (rawKey: string) => {
-  return crypto.createHash("sha256").update(rawKey).digest("hex");
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is new in Node 22
+  return (crypto as any).hash("sha256", rawKey, "hex");
 };
 
 export const createApiKeyValue = () => {
