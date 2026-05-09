@@ -94,7 +94,14 @@ export class TerminalService {
   private resolveCwd(cwd: string) {
     const resolved = path.resolve(cwd);
     const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
+    const currentRoot = path.resolve(".");
+
+    const isWithin = (root: string, target: string) => {
+      const relative = path.relative(root, target);
+      return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+    };
+
+    if (!isWithin(allowedRoot, resolved) && !isWithin(currentRoot, resolved)) {
       throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
     }
 
