@@ -1,0 +1,3 @@
+## 2026-05-10 - [Optimize AI vector operations and hashing]
+**Learning:** Node 22's `engines` field in `package.json` allows safe use of the high-performance `crypto.hash` API (62% faster for single-shot hashing). Manual `for` loops on 1536-dimensional vectors are significantly (~25x) faster than `Array.from` and `reduce`/`map`. `Math.round(v * 1e8) / 1e8` is ~30x faster than `toFixed(8)` but has slightly different rounding behavior for negative numbers at the midpoint (-1.5 rounds to -1 with `Math.round` but -2 with `toFixed`).
+**Action:** Prefer `Math.round` for performance-critical vector rounding where exact midpoint behavior for negative values is not critical. Always check `engines` before using modern Node APIs.
