@@ -12,11 +12,25 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+    return (crypto as any).hash("sha256", normalizeText(value), "hex");
+  }
+  return crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const data = `${seed}:${index}`;
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+    const digest = (crypto as any).hash("sha256", data, "buffer");
+    const int = digest.readUInt32BE(0);
+    return int / 0xffffffff;
+  }
+  const digest = crypto.createHash("sha256").update(data).digest();
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };

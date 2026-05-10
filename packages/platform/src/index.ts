@@ -236,6 +236,11 @@ export const fromServiceAuthContextHeader = (encoded?: string) => {
 };
 
 export const hashApiKey = (rawKey: string) => {
+  // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+  if (typeof (crypto as any).hash === "function") {
+    // biome-ignore lint/suspicious/noExplicitAny: crypto.hash is a new Node 22 API
+    return (crypto as any).hash("sha256", rawKey, "hex");
+  }
   return crypto.createHash("sha256").update(rawKey).digest("hex");
 };
 
