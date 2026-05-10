@@ -203,7 +203,22 @@ export const assertInternalRequest = (
   token = loadPlatformConfig().internalServiceToken
 ) => {
   const internalToken = headers["x-jeanbot-internal-token"];
-  if (!internalToken || internalToken !== token) {
+  if (!internalToken) {
+    throw new Error("Unauthorized internal service request.");
+  }
+
+  // Ensure we compare strings safely
+  const providedToken = Array.isArray(internalToken) ? internalToken[0] : internalToken;
+  if (!providedToken) {
+    throw new Error("Unauthorized internal service request.");
+  }
+
+  // Use timing-safe comparison to prevent timing attacks.
+  // We hash both tokens to ensure they have the same length before comparison.
+  const expectedHash = crypto.createHash("sha256").update(token).digest();
+  const providedHash = crypto.createHash("sha256").update(providedToken).digest();
+
+  if (!crypto.timingSafeEqual(expectedHash, providedHash)) {
     throw new Error("Unauthorized internal service request.");
   }
 };
