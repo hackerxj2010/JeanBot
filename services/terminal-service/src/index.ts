@@ -103,7 +103,7 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /(?:^|[\s;&|])rm\s+-rf\s+\/(?:[\s;&|]|$)/i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
