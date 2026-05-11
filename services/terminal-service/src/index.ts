@@ -94,7 +94,14 @@ export class TerminalService {
   private resolveCwd(cwd: string) {
     const resolved = path.resolve(cwd);
     const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
+    const projectRoot = path.resolve(".");
+
+    const isInside = (child: string, parent: string) => {
+      const relative = path.relative(parent, child);
+      return !relative.startsWith("..") && !path.isAbsolute(relative);
+    };
+
+    if (!isInside(resolved, allowedRoot) && !isInside(resolved, projectRoot)) {
       throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
     }
 
@@ -103,13 +110,13 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
-      /\bshutdown\b/i,
-      /\breboot\b/i,
-      /\bformat\b/i,
-      /\bdel\s+\/f\s+\/s\s+\/q\b/i,
-      /\bmkfs\b/i,
-      /\bdiskpart\b/i
+      /(?:^|[\s;&|])rm\s+-rf\s+\/(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])shutdown(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])reboot(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])format(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])del\s+\/f\s+\/s\s+\/q(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])mkfs(?:[\s;&|]|$)/i,
+      /(?:^|[\s;&|])diskpart(?:[\s;&|]|$)/i
     ];
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
