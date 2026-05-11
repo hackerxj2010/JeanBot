@@ -360,6 +360,25 @@ class MissionExecutorService:
             "finished_at": result.finished_at,
         }
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-payload.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        # State is stored in .jeanbot/state/mission-{mission_id}.json by LocalFileService
+        path = Path(self.workspace_root) / ".jeanbot" / "state" / f"mission-{mission_id}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
     def _mission_dir(self, mission_id: str) -> Path:
         return ensure_directory(Path(self.workspace_root) / ".jeanbot" / "missions" / mission_id)
 
