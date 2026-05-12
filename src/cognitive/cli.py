@@ -5,7 +5,7 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
 from .service import MissionExecutorService
 
@@ -50,6 +50,7 @@ async def run_shell(args: argparse.Namespace):
     last_result = None
     mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
+    missions: list[Any] = []
 
     while True:
         try:
@@ -65,14 +66,73 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show status of the last mission")
+                print("  show <idx/id>     Show artifact content")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
                 continue
 
             if line.lower() == "history":
+                print("Command History:")
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                if missions:
+                    print("\nMission History:")
+                    for i, m in enumerate(missions, 1):
+                        # Some results might be dict-like if returned from finalize_distributed_payload
+                        if isinstance(m, dict):
+                            res = m.get("result", m)
+                            m_title = m.get("title", res.get("mission_id", "Unknown"))
+                            m_status = res.get("status", "unknown")
+                            m_artifacts = res.get("artifacts", [])
+                        else:
+                            m_title = getattr(m, "title", getattr(m, "mission_id", "Unknown"))
+                            m_status = getattr(m, "status", "unknown")
+                            m_artifacts = getattr(m, "artifacts", [])
+
+                        print(f"  [{i}] {m_title}: {m_status} ({len(m_artifacts)} artifacts)")
+                continue
+
+            if line.lower() == "status":
+                if not last_result:
+                    print("No mission executed yet.")
+                    continue
+                print(f"Mission: {last_result.mission_id}")
+                print(f"Status: {last_result.status}")
+                print(f"Summary: {last_result.verification_summary}")
+                if last_result.metrics:
+                    print("Metrics:")
+                    for k, v in last_result.metrics.items():
+                        print(f"  {k}: {v}")
+                if last_result.artifacts:
+                    print(f"Artifacts: {len(last_result.artifacts)}")
+                    for i, artifact in enumerate(last_result.artifacts, 1):
+                        print(f"  [{i}] {artifact.title} ({artifact.id[:8]})")
+                continue
+
+            if line.lower().startswith("show "):
+                if not last_result or not last_result.artifacts:
+                    print("No artifacts available.")
+                    continue
+                query = line[5:].strip()
+                target = None
+                if query.isdigit():
+                    idx = int(query) - 1
+                    if 0 <= idx < len(last_result.artifacts):
+                        target = last_result.artifacts[idx]
+                else:
+                    target = next((a for a in last_result.artifacts if a.id.startswith(query)), None)
+
+                if target:
+                    path = Path(target.path)
+                    if path.exists():
+                        print(f"--- Artifact: {target.title} ---")
+                        print(path.read_text(encoding="utf-8"))
+                    else:
+                        print(f"Artifact file not found: {target.path}")
+                else:
+                    print(f"Artifact not found: {query}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -99,6 +159,7 @@ async def run_shell(args: argparse.Namespace):
 
             print(f"Executing: {title}")
             last_result = await service.execute_payload(payload)
+            missions.append(last_result)
 
             print(f"\nStatus: {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")
