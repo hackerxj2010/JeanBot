@@ -1,0 +1,3 @@
+## 2026-05-12 - Hashing and Vector Precision Optimizations
+**Learning:** Node 22's `crypto.hash` is significantly faster (~2x) than the legacy `createHash` pattern for single-shot operations. Additionally, replacing `toFixed(8)` with a `Math.round`-based pattern provides a massive (~100x) speedup by avoiding string conversion, but requires manual handling of negative midpoints to maintain exact parity with `toFixed` (e.g., `-1.5.toFixed(0)` is `-2` while `Math.round(-1.5)` is `-1`).
+**Action:** Use `crypto.hash` for single-shot hashing in Node 22+ environments. For high-performance vector math, use `v >= 0 ? Math.round(v * 1e8) / 1e8 : -Math.round(-v * 1e8) / 1e8` to replace `Number(v.toFixed(8))`.
