@@ -138,6 +138,25 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-payload.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    async def get_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        bundle = self.build_bundle({"workspace_id": "temp", "title": "temp", "objective": "temp"})
+        return await bundle.file_service.load_mission_state(mission_id)
+
+    def plan_mission(self, mission_payload: dict[str, Any]) -> MissionPlan:
+        return self._build_plan(mission_payload)
+
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -201,12 +220,14 @@ class MissionExecutorService:
 
     def _build_plan(self, mission_payload: dict[str, Any]) -> MissionPlan:
         raw_steps = mission_payload.get("steps")
+        objective = mission_payload.get("objective", "Unknown")
         if not raw_steps:
-            raw_steps = self._default_steps_for_objective(mission_payload["objective"])
+            raw_steps = self._default_steps_for_objective(objective)
         steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
             steps=steps,
+            summary=f"JeanBot will execute a series of steps to address: {objective}",
         )
 
     def _build_step(self, index: int, item: dict[str, Any]) -> MissionStep:

@@ -71,6 +71,7 @@ class MissionStep:
 class MissionPlan:
     version: int = 1
     steps: list[MissionStep] = field(default_factory=list)
+    summary: str = ""
 
 
 @dataclass
@@ -867,6 +868,7 @@ class MissionExecutor:
         template: SubAgentTemplate,
         context: ExecutionContext,
     ) -> StepOutcome:
+        print(f"\n[Step Started] {step.id}: {step.title}")
         step_started_at = utc_now_iso()
         step.status = "running"
         
@@ -961,6 +963,8 @@ class MissionExecutor:
             },
         )
         
+        print(f"[Step Completed] {step.id}: score={diagnostics.overall_score:.2f}")
+
         return StepOutcome(
             step=step,
             report=report,
