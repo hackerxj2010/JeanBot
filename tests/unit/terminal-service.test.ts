@@ -8,7 +8,7 @@ describe("TerminalService", () => {
   it("records terminal executions, outputs, background jobs, and watches", async () => {
     const service = new TerminalService();
     const workspaceId = `terminal-workspace-${Date.now()}`;
-    const cwd = path.resolve(".");
+    const cwd = path.resolve("workspace");
 
     const execution = await service.run({
       workspaceId,
