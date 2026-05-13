@@ -44,9 +44,17 @@ export const ensureLeastPrivilege = (
     return requestedPermissions.every((permission) => tool.permissions.includes(permission));
 };
 
+let cachedEncryptionKey: Buffer | undefined;
+
 const encryptionKey = () => {
+  if (cachedEncryptionKey) {
+    return cachedEncryptionKey;
+  }
+
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+  // @ts-ignore
+  cachedEncryptionKey = crypto.hash("sha256", secret, "buffer");
+  return cachedEncryptionKey;
 };
 
 export const encryptSecret = (plaintext: string) => {
