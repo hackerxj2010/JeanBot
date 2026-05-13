@@ -64,7 +64,8 @@ export class TerminalService {
   }
 
   private workspaceRoot() {
-    return path.resolve(process.env.JEANBOT_ALLOWED_WORKSPACE_ROOT ?? "workspace");
+    const root = process.env.JEANBOT_ALLOWED_WORKSPACE_ROOT ?? "workspace";
+    return path.resolve(root);
   }
 
   private terminalRoot(workspaceId: string) {
@@ -94,7 +95,22 @@ export class TerminalService {
   private resolveCwd(cwd: string) {
     const resolved = path.resolve(cwd);
     const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
+    const projectRoot = path.resolve(".");
+
+    const isUnder = (root: string, target: string) => {
+      const relative = path.relative(root, target);
+      if (relative === "") {
+        return true;
+      }
+      return !relative.startsWith("..") && !path.isAbsolute(relative);
+    };
+
+    const isAllowedChild = isUnder(allowedRoot, resolved);
+    const isTempChild = isUnder(path.join(projectRoot, "tmp"), resolved);
+
+    const isProjectRoot = resolved === projectRoot;
+
+    if (!isAllowedChild && !isTempChild && !isProjectRoot) {
       throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
     }
 
@@ -103,7 +119,7 @@ export class TerminalService {
 
   private assertSafeCommand(command: string) {
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      /(?:^|[\s;&|])rm\s+-rf\s+\/(?:[\s;&|]|$)/i,
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
