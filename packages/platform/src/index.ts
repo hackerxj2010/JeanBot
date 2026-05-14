@@ -198,13 +198,30 @@ export const buildInternalHeaders = (
   };
 };
 
+/**
+ * Asserts that the request contains a valid internal service token.
+ * Uses constant-time comparison to prevent timing attacks and handles array-based headers.
+ */
 export const assertInternalRequest = (
   headers: Record<string, string | string[] | undefined>,
   token = loadPlatformConfig().internalServiceToken
 ) => {
-  const internalToken = headers["x-jeanbot-internal-token"];
-  if (!internalToken || internalToken !== token) {
-    throw new Error("Unauthorized internal service request.");
+  const internalTokenHeader = headers["x-jeanbot-internal-token"];
+  const actualToken = Array.isArray(internalTokenHeader) ? internalTokenHeader[0] : internalTokenHeader;
+
+  if (!actualToken) {
+    throw new Error("Unauthorized internal service request. Missing token.");
+  }
+
+  const actualBuffer = Buffer.from(actualToken);
+  const expectedBuffer = Buffer.from(token);
+
+  // Constant-time comparison is critical to prevent side-channel leaks of the service token
+  if (
+    actualBuffer.length !== expectedBuffer.length ||
+    !crypto.timingSafeEqual(actualBuffer, expectedBuffer)
+  ) {
+    throw new Error("Unauthorized internal service request. Invalid token.");
   }
 };
 

@@ -32,6 +32,7 @@ export const riskFromText = (text: string): RiskLevel => {
 
 export const redactSecrets = (input: string) => {
   return input
+    .replace(/sk-ant-[A-Za-z0-9_-]+/g, "[REDACTED_ANTHROPIC_KEY]")
     .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
     .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
     .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
@@ -41,12 +42,23 @@ export const ensureLeastPrivilege = (
   tool: ToolDescriptor,
   requestedPermissions: string[]
 ) => {
-    return requestedPermissions.every((permission) => tool.permissions.includes(permission));
+  return requestedPermissions.every((permission) => tool.permissions.includes(permission));
 };
 
+let cachedEncryptionKey: Buffer | undefined;
+
+/**
+ * Derives the encryption key from the environment secret.
+ * Results are memoized to improve performance for high-volume encryption/decryption tasks.
+ */
 const encryptionKey = () => {
+  if (cachedEncryptionKey) {
+    return cachedEncryptionKey;
+  }
+
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+  cachedEncryptionKey = crypto.createHash("sha256").update(secret).digest();
+  return cachedEncryptionKey;
 };
 
 export const encryptSecret = (plaintext: string) => {
