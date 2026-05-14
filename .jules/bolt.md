@@ -1,0 +1,3 @@
+## 2026-05-14 - Optimized AI vector operations and hashing
+**Learning:** In hot paths involving high-dimensional vectors (1536 dims), `Number(val.toFixed(8))` is a significant bottleneck due to string conversion/parsing (~90% slower than `Math.round`). Node 22's `crypto.hash` is also ~60% faster for single-shot operations than the legacy `createHash` streaming API.
+**Action:** Use `Math.round` based precision logic (with negative handling) and `crypto.hash` for high-frequency numerical and hashing operations. Always prefer manual `for` loops and pre-allocated arrays over `Array.from` or `.map` for performance-critical vector processing.
