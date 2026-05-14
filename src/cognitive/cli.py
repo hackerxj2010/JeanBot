@@ -51,6 +51,8 @@ async def run_shell(args: argparse.Namespace):
     mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
 
+    missions: list[dict[str, Any]] = []
+
     while True:
         try:
             line = input("\njeanbot> ").strip()
@@ -64,15 +66,39 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() == "help":
                 print("Commands:")
                 print("  help              Show this help")
-                print("  history           Show command history")
+                print("  history           Show mission summaries and command history")
+                print("  status            Show diagnostic view of the last executed mission")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
                 continue
 
             if line.lower() == "history":
+                print("Mission History:")
+                for i, m in enumerate(missions, 1):
+                    print(f"  {i:2}. {m['title']} ({m['status']})")
+                    print(f"      Summary: {m['summary']}")
+                print("\nCommand History:")
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                continue
+
+            if line.lower() == "status":
+                if not last_result:
+                    print("No mission has been executed yet.")
+                else:
+                    print(f"Last Mission: {last_result.mission_id}")
+                    print(f"Title: {title}")
+                    print(f"Status: {last_result.status}")
+                    print(f"Final Verification: {last_result.verification_summary}")
+                    print("\nPerformance Metrics:")
+                    print(f"  - Total Steps: {last_result.metrics.get('total_steps', 0)}")
+                    print(f"  - Completed: {last_result.metrics.get('completed_steps', 0)}")
+                    print(f"  - Average Score: {last_result.metrics.get('average_score', 0):.2f}")
+                    if last_result.artifacts:
+                        print("\nGenerated Artifacts:")
+                        for artifact in last_result.artifacts:
+                            print(f"  - [{artifact.kind}] {artifact.title}: {artifact.path}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -99,6 +125,13 @@ async def run_shell(args: argparse.Namespace):
 
             print(f"Executing: {title}")
             last_result = await service.execute_payload(payload)
+
+            missions.append({
+                "id": last_result.mission_id,
+                "title": title,
+                "status": last_result.status,
+                "summary": last_result.verification_summary
+            })
 
             print(f"\nStatus: {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")

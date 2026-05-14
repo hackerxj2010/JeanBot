@@ -1149,9 +1149,17 @@ class MissionExecutor:
         existing_state = await self.file_service.load_mission_state(record.objective.id)
         if existing_state:
             print(f"Resuming mission {record.objective.id} from persisted state.")
-            # Merging logic could be more complex, but for now we focus on basic recovery parity
-            record.decision_log.extend(existing_state.get("decision_log", []))
-            record.replan_history.extend(existing_state.get("replan_history", []))
+            record.decision_log = existing_state.get("decision_log", [])
+            record.replan_history = existing_state.get("replan_history", [])
+            record.plan_version = existing_state.get("plan_version")
+
+            # Restore step statuses from persisted state
+            persisted_steps = existing_state.get("steps", [])
+            if record.plan and persisted_steps:
+                status_map = {s["id"]: s["status"] for s in persisted_steps}
+                for step in record.plan.steps:
+                    if step.id in status_map:
+                        step.status = status_map[step.id]
 
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
@@ -1238,11 +1246,15 @@ class MissionExecutor:
             
             await self._update_workspace_context(record, context)
 
-            # Persist state after each batch for recovery
+            # Persist state after each batch for recovery, including step statuses
             await self.file_service.save_mission_state(record.objective.id, {
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "steps": [
+                    {"id": s.id, "status": s.status}
+                    for s in (record.plan.steps if record.plan else [])
+                ],
             })
 
             await self.audit_service.record(
