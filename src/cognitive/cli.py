@@ -21,6 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
 
+    plan_command_parser = subparsers.add_parser("plan", help="Plan a mission without execution")
+    plan_command_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
+    plan_command_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
         help="Finalize a distributed mission payload with active_execution",
@@ -48,8 +52,9 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+    last_mission_id = None
     history: list[str] = []
+    missions: list[dict] = []
 
     while True:
         try:
@@ -59,21 +64,55 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() in ("exit", "quit"):
                 break
 
-            history.append(line)
-
+            # Process commands that don't count as missions
             if line.lower() == "help":
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show status of last mission")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
                 continue
 
             if line.lower() == "history":
-                for i, cmd in enumerate(history, 1):
-                    print(f"  {i:3}  {cmd}")
+                # Find matching mission for each history entry
+                for i, cmd_data in enumerate(history, 1):
+                    cmd = cmd_data["line"]
+                    m = cmd_data.get("mission")
+                    mission_info = f" -> {m['status']} ({m['id']})" if m else ""
+                    print(f"  {i:3}  {cmd}{mission_info}")
                 continue
+
+            if line.lower() == "status":
+                if not last_mission_id:
+                    print("No mission executed yet.")
+                    continue
+                summary = service.get_mission_run_summary(last_mission_id)
+                if not summary:
+                    print(f"No summary found for mission {last_mission_id}")
+                    continue
+
+                res = summary.get("result", {})
+                print(f"Mission: {summary['mission']['title']}")
+                print(f"ID: {last_mission_id}")
+                print(f"Status: {res.get('status', 'unknown')}")
+                print(f"Verification: {res.get('verification_summary', 'N/A')}")
+
+                metrics = res.get("metrics", {})
+                if metrics:
+                    print(f"Performance: {metrics.get('completed_steps', 0)}/{metrics.get('total_steps', 0)} steps, {metrics.get('average_score', 0)} avg score")
+
+                artifacts = res.get("artifacts", [])
+                if artifacts:
+                    print(f"Artifacts ({len(artifacts)}):")
+                    for a in artifacts:
+                        print(f"  - {a['title']}: {a['path']}")
+                continue
+
+            # This is a mission-generating command
+            current_history_entry = {"line": line}
+            history.append(current_history_entry)
 
             if line.lower().startswith("refine "):
                 if not last_result:
@@ -89,6 +128,8 @@ async def run_shell(args: argparse.Namespace):
                 objective = line
                 title = f"Mission: {line[:30]}..."
 
+            mission_id = f"shell-{uuid.uuid4().hex[:8]}"
+            last_mission_id = mission_id
             payload = {
                 "mission_id": mission_id,
                 "workspace_id": args.workspace_id,
@@ -99,6 +140,9 @@ async def run_shell(args: argparse.Namespace):
 
             print(f"Executing: {title}")
             last_result = await service.execute_payload(payload)
+            mission_entry = {"id": mission_id, "status": last_result.status, "title": title}
+            missions.append(mission_entry)
+            current_history_entry["mission"] = mission_entry
 
             print(f"\nStatus: {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")
@@ -127,6 +171,16 @@ async def run_command(args: argparse.Namespace) -> dict:
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)
+    elif args.command == "plan":
+        plan = service.plan_mission(payload)
+        return {
+            "command": "plan",
+            "summary": plan.summary,
+            "steps": [
+                {"id": s.id, "title": s.title, "capability": s.capability}
+                for s in plan.steps
+            ],
+        }
     elif args.command == "finalize-distributed":
         result = await service.finalize_distributed_payload(payload)
     else:

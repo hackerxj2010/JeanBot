@@ -138,6 +138,31 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    def plan_mission(self, mission_payload: dict[str, Any]) -> MissionPlan:
+        """Decompose an objective into a mission plan without execution."""
+        return self._build_plan(mission_payload)
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        """Retrieve the persisted run summary for a mission."""
+        path = self._mission_dir(mission_id) / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any] | None:
+        """Retrieve the persisted payload for a mission."""
+        path = self._mission_dir(mission_id) / "mission-payload.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        """Retrieve the persisted internal state for a mission."""
+        state_path = Path(self.workspace_root) / ".jeanbot" / "state" / f"mission-{mission_id}.json"
+        if not state_path.exists():
+            return None
+        return json.loads(state_path.read_text(encoding="utf-8"))
+
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -204,8 +229,10 @@ class MissionExecutorService:
         if not raw_steps:
             raw_steps = self._default_steps_for_objective(mission_payload["objective"])
         steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
+        summary = mission_payload.get("summary") or f"Mission plan for: {mission_payload.get('title', 'Untitled')}"
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
+            summary=summary,
             steps=steps,
         )
 
