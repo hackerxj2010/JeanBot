@@ -10,40 +10,67 @@ const OPENAI_BATCH_SIZE = 32;
 const MAX_CONCURRENCY = 3;
 const MAX_RETRIES = 2;
 
-const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
+export const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+/**
+ * High-performance rounding to 8 decimal places.
+ * Maintains parity with toFixed(8) rounding for positive and negative numbers.
+ */
+const round8 = (v: number) =>
+  v >= 0 ? Math.round(v * 1e8) / 1e8 : -Math.round(-v * 1e8) / 1e8;
 
-const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+export const contentHashFor = (value: string) =>
+  // @ts-ignore - crypto.hash is available in Node 22
+  (crypto.hash
+    ? // @ts-ignore
+      crypto.hash("sha256", normalizeText(value), "hex")
+    : crypto.createHash("sha256").update(normalizeText(value)).digest("hex"));
+
+export const seededUnitValue = (seed: string, index: number) => {
+  // @ts-ignore - crypto.hash is available in Node 22
+  const digest = crypto.hash
+    ? // @ts-ignore
+      (crypto.hash("sha256", `${seed}:${index}`, "buffer") as Buffer)
+    : crypto.createHash("sha256").update(`${seed}:${index}`).digest();
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
 
-const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
+export const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
     const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+    values[index] = round8(centered);
+  }
   return normalizeVector(values);
 };
 
-const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+export const normalizeVector = (values: number[]) => {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sumSq = 0;
+  for (let i = 0; i < length; i++) {
+    sumSq += values[i] * values[i];
+  }
+  const magnitude = Math.sqrt(sumSq);
+
   if (magnitude === 0) {
-    return values.map(() => 0);
+    const result = new Array(length);
+    for (let i = 0; i < length; i++) result[i] = 0;
+    return result;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const invMagnitude = 1 / magnitude;
+  const result = new Array(length);
+  for (let i = 0; i < length; i++) {
+    result[i] = round8(values[i] * invMagnitude);
+  }
+  return result;
 };
 
 const toEmbeddingVectorRecord = (
