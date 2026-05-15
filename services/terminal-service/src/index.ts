@@ -93,8 +93,14 @@ export class TerminalService {
 
   private resolveCwd(cwd: string) {
     const resolved = path.resolve(cwd);
-    const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
+    const allowedRoots = [this.workspaceRoot(), path.resolve(".")];
+
+    const isAllowed = allowedRoots.some((root) => {
+      const relative = path.relative(root, resolved);
+      return !relative.startsWith("..") && !path.isAbsolute(relative);
+    });
+
+    if (!isAllowed) {
       throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
     }
 
@@ -102,15 +108,18 @@ export class TerminalService {
   }
 
   private assertSafeCommand(command: string) {
+    const boundaryStart = /(?:^|[\s;&|])/;
+    const boundaryEnd = /(?:[\s;&|]|$)/;
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
-      /\bshutdown\b/i,
-      /\breboot\b/i,
-      /\bformat\b/i,
-      /\bdel\s+\/f\s+\/s\s+\/q\b/i,
-      /\bmkfs\b/i,
-      /\bdiskpart\b/i
-    ];
+      /rm\s+-rf\s+\//i,
+      /shutdown/i,
+      /reboot/i,
+      /format/i,
+      /del\s+\/f\s+\/s\s+\/q/i,
+      /mkfs/i,
+      /diskpart/i
+    ].map((p) => new RegExp(boundaryStart.source + p.source + boundaryEnd.source, "i"));
+
     const matched = blockedPatterns.find((pattern) => pattern.test(command));
     if (matched) {
       throw new Error(`Blocked terminal command pattern "${matched.source}".`);
