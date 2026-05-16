@@ -1,245 +1,273 @@
-import crypto from "node:crypto";
+import crypto from "node:crypto"
 
-import { selectEmbeddingModel } from "@jeanbot/model-router";
-import { recordCounter, recordDuration } from "@jeanbot/telemetry";
-import type { EmbeddingProvider, EmbeddingVectorRecord } from "@jeanbot/types";
+import { selectEmbeddingModel } from "@jeanbot/model-router"
+import { recordCounter, recordDuration } from "@jeanbot/telemetry"
+import type { EmbeddingProvider, EmbeddingVectorRecord } from "@jeanbot/types"
 
-const DEFAULT_EMBEDDING_DIMENSIONS = 1536;
-const OPENAI_EMBEDDING_ENDPOINT = "https://api.openai.com/v1/embeddings";
-const OPENAI_BATCH_SIZE = 32;
-const MAX_CONCURRENCY = 3;
-const MAX_RETRIES = 2;
+const DEFAULT_EMBEDDING_DIMENSIONS = 1536
+const OPENAI_EMBEDDING_ENDPOINT = "https://api.openai.com/v1/embeddings"
+const OPENAI_BATCH_SIZE = 32
+const MAX_CONCURRENCY = 3
+const MAX_RETRIES = 2
 
-const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
+const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim()
 
 const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+  // @ts-ignore - crypto.hash is available in Node 22
+  crypto.hash
+    ? crypto.hash("sha256", normalizeText(value), "hex")
+    : crypto.createHash("sha256").update(normalizeText(value)).digest("hex")
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
-  const int = digest.readUInt32BE(0);
-  return int / 0xffffffff;
-};
+  // @ts-ignore - crypto.hash is available in Node 22
+  const digest = crypto.hash
+    ? crypto.hash("sha256", `${seed}:${index}`, "buffer")
+    : crypto.createHash("sha256").update(`${seed}:${index}`).digest()
+  const int = digest.readUInt32BE(0)
+  return int / 0xffffffff
+}
 
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
-  const normalized = normalizeText(text);
-  const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
-    const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
-  return normalizeVector(values);
-};
+  // syntheticVector is called from generateEmbeddings which already normalizes
+  // We use the content hash to seed the synthetic vector generation
+  const hash = contentHashFor(text)
+  const values = new Array(dimensions)
+  for (let i = 0; i < dimensions; i++) {
+    // seededUnitValue returns [0, 1], we want [-1, 1]
+    values[i] = seededUnitValue(hash, i) * 2 - 1
+  }
+  // normalizeVector handles the precision rounding and unit length normalization
+  return normalizeVector(values)
+}
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
-    return values;
+  const length = values.length
+  if (length === 0) {
+    return values
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
+  let sum = 0
+  for (let i = 0; i < length; i++) {
+    const v = values[i] ?? 0
+    sum += v * v
+  }
+
+  const magnitude = Math.sqrt(sum)
+  const result = new Array(length)
+
   if (magnitude === 0) {
-    return values.map(() => 0);
+    for (let i = 0; i < length; i++) {
+      result[i] = 0
+    }
+    return result
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
-};
+  const invMagnitude = 1 / magnitude
+  for (let i = 0; i < length; i++) {
+    const v = (values[i] ?? 0) * invMagnitude
+    // Faster alternative to Number(v.toFixed(8))
+    // We use Math.round(v * 1e8) / 1e8 for 8 decimal places
+    result[i] = Math.round(v * 1e8) / 1e8
+  }
+
+  return result
+}
 
 const toEmbeddingVectorRecord = (
   text: string,
   values: number[],
   provider: EmbeddingProvider,
-  model: string
+  model: string,
 ): EmbeddingVectorRecord => ({
-  values: normalizeVector(values),
+  // Optimization: assume values are already normalized by the caller
+  // syntheticVector and callOpenAiEmbeddings both return normalized vectors
+  values,
   dimensions: values.length,
   provider,
   model,
   generatedAt: new Date().toISOString(),
-  contentHash: contentHashFor(text)
-});
+  contentHash: contentHashFor(text),
+})
 
 const sleep = (timeMs: number) =>
   new Promise<void>((resolve) => {
-    setTimeout(resolve, timeMs);
-  });
+    setTimeout(resolve, timeMs)
+  })
 
 const chunk = <T>(values: T[], size: number) => {
-  const chunks: T[][] = [];
+  const chunks: T[][] = []
   for (let index = 0; index < values.length; index += size) {
-    chunks.push(values.slice(index, index + size));
+    chunks.push(values.slice(index, index + size))
   }
 
-  return chunks;
-};
+  return chunks
+}
 
 const runBounded = async <TInput, TOutput>(
   values: TInput[],
   limit: number,
-  task: (value: TInput, index: number) => Promise<TOutput>
+  task: (value: TInput, index: number) => Promise<TOutput>,
 ) => {
-  const results: TOutput[] = new Array(values.length);
-  let nextIndex = 0;
-  const workers = Array.from({
-    length: Math.max(1, Math.min(limit, values.length))
-  }, async () => {
-    while (nextIndex < values.length) {
-      const current = nextIndex;
-      nextIndex += 1;
-      results[current] = await task(values[current], current);
-    }
-  });
+  const results: TOutput[] = new Array(values.length)
+  let nextIndex = 0
+  const workers = Array.from(
+    {
+      length: Math.max(1, Math.min(limit, values.length)),
+    },
+    async () => {
+      while (nextIndex < values.length) {
+        const current = nextIndex
+        nextIndex += 1
+        results[current] = await task(values[current], current)
+      }
+    },
+  )
 
-  await Promise.all(workers);
-  return results;
-};
+  await Promise.all(workers)
+  return results
+}
 
-const callOpenAiEmbeddings = async (
-  inputs: string[],
-  apiKey: string,
-  model: string
-) => {
+const callOpenAiEmbeddings = async (inputs: string[], apiKey: string, model: string) => {
   const response = await fetch(OPENAI_EMBEDDING_ENDPOINT, {
     method: "POST",
     headers: {
       authorization: `Bearer ${apiKey}`,
-      "content-type": "application/json"
+      "content-type": "application/json",
     },
     body: JSON.stringify({
       model,
-      input: inputs
-    })
-  });
+      input: inputs,
+    }),
+  })
 
   if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`OpenAI embeddings failed (${response.status}): ${body.slice(0, 300)}`);
+    const body = await response.text()
+    throw new Error(`OpenAI embeddings failed (${response.status}): ${body.slice(0, 300)}`)
   }
 
   const payload = (await response.json()) as {
     data?: Array<{
-      embedding?: number[];
-      index?: number;
-    }>;
-  };
+      embedding?: number[]
+      index?: number
+    }>
+  }
 
-  const data = payload.data ?? [];
+  const data = payload.data ?? []
   return data
     .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))
-    .map((record) => normalizeVector(record.embedding ?? []));
-};
+    .map((record) => normalizeVector(record.embedding ?? []))
+}
 
 const embedBatchLive = async (
   inputs: string[],
   apiKey: string,
   model: string,
-  retries = MAX_RETRIES
+  retries = MAX_RETRIES,
 ) => {
-  const startedAt = Date.now();
+  const startedAt = Date.now()
   try {
-    const vectors = await callOpenAiEmbeddings(inputs, apiKey, model);
+    const vectors = await callOpenAiEmbeddings(inputs, apiKey, model)
     recordCounter("jeanbot_embeddings_requests_total", "JeanBot embedding requests", {
       provider: "openai",
-      status: "ok"
-    });
+      status: "ok",
+    })
     recordDuration(
       "jeanbot_embeddings_request_duration_ms",
       "JeanBot embedding request duration",
       Date.now() - startedAt,
       {
-        provider: "openai"
-      }
-    );
-    return vectors;
+        provider: "openai",
+      },
+    )
+    return vectors
   } catch (error) {
     recordCounter("jeanbot_embeddings_requests_total", "JeanBot embedding requests", {
       provider: "openai",
-      status: "failed"
-    });
+      status: "failed",
+    })
     if (retries <= 0) {
-      throw error;
+      throw error
     }
 
-    await sleep((MAX_RETRIES - retries + 1) * 250);
-    return embedBatchLive(inputs, apiKey, model, retries - 1);
+    await sleep((MAX_RETRIES - retries + 1) * 250)
+    return embedBatchLive(inputs, apiKey, model, retries - 1)
   }
-};
-
-export interface EmbeddingGenerationOptions {
-  forceSynthetic?: boolean | undefined;
 }
 
-export const embeddingDimensions = DEFAULT_EMBEDDING_DIMENSIONS;
+export interface EmbeddingGenerationOptions {
+  forceSynthetic?: boolean | undefined
+}
+
+export const embeddingDimensions = DEFAULT_EMBEDDING_DIMENSIONS
 
 export const embeddingRuntimeStatus = () => {
-  const selection = selectEmbeddingModel();
-  const configured = Boolean(process.env.OPENAI_API_KEY);
+  const selection = selectEmbeddingModel()
+  const configured = Boolean(process.env.OPENAI_API_KEY)
   return {
     provider: configured ? "openai" : "synthetic",
     configured,
     model: selection.model,
-    dimensions: DEFAULT_EMBEDDING_DIMENSIONS
-  };
-};
+    dimensions: DEFAULT_EMBEDDING_DIMENSIONS,
+  }
+}
 
 export const generateEmbeddings = async (
   inputs: string[],
-  options: EmbeddingGenerationOptions = {}
+  options: EmbeddingGenerationOptions = {},
 ) => {
-  const selection = selectEmbeddingModel();
-  const normalizedInputs = inputs.map((input) => normalizeText(input));
-  const useLive = Boolean(process.env.OPENAI_API_KEY) && !options.forceSynthetic;
-  const provider: EmbeddingProvider = useLive ? "openai" : "synthetic";
+  const selection = selectEmbeddingModel()
+  const normalizedInputs = inputs.map((input) => normalizeText(input))
+  const useLive = Boolean(process.env.OPENAI_API_KEY) && !options.forceSynthetic
+  const provider: EmbeddingProvider = useLive ? "openai" : "synthetic"
 
   if (!useLive) {
     return normalizedInputs.map((input) =>
-      toEmbeddingVectorRecord(input, syntheticVector(input), provider, selection.model)
-    );
+      toEmbeddingVectorRecord(input, syntheticVector(input), provider, selection.model),
+    )
   }
 
-  const batches = chunk(normalizedInputs, OPENAI_BATCH_SIZE);
+  const batches = chunk(normalizedInputs, OPENAI_BATCH_SIZE)
   const batchedVectors = await runBounded(batches, MAX_CONCURRENCY, async (batch) =>
-    embedBatchLive(batch, String(process.env.OPENAI_API_KEY), selection.model)
-  );
+    embedBatchLive(batch, String(process.env.OPENAI_API_KEY), selection.model),
+  )
 
   return batchedVectors
     .flat()
     .map((values, index) =>
-      toEmbeddingVectorRecord(normalizedInputs[index], values, provider, selection.model)
-    );
-};
+      toEmbeddingVectorRecord(normalizedInputs[index], values, provider, selection.model),
+    )
+}
 
 export const generateEmbedding = async (
   input: string,
-  options: EmbeddingGenerationOptions = {}
+  options: EmbeddingGenerationOptions = {},
 ) => {
-  const [record] = await generateEmbeddings([input], options);
-  return record;
-};
+  const [record] = await generateEmbeddings([input], options)
+  return record
+}
 
 export const cosineSimilarity = (left: number[] | undefined, right: number[] | undefined) => {
   if (!left || !right || left.length === 0 || right.length === 0 || left.length !== right.length) {
-    return 0;
+    return 0
   }
 
-  let dot = 0;
-  let leftMagnitude = 0;
-  let rightMagnitude = 0;
+  let dot = 0
+  let leftMagnitude = 0
+  let rightMagnitude = 0
   for (let index = 0; index < left.length; index += 1) {
-    const leftValue = left[index] ?? 0;
-    const rightValue = right[index] ?? 0;
-    dot += leftValue * rightValue;
-    leftMagnitude += leftValue * leftValue;
-    rightMagnitude += rightValue * rightValue;
+    const leftValue = left[index] ?? 0
+    const rightValue = right[index] ?? 0
+    dot += leftValue * rightValue
+    leftMagnitude += leftValue * leftValue
+    rightMagnitude += rightValue * rightValue
   }
 
   if (leftMagnitude === 0 || rightMagnitude === 0) {
-    return 0;
+    return 0
   }
 
-  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude));
-};
+  return dot / (Math.sqrt(leftMagnitude) * Math.sqrt(rightMagnitude))
+}
 
-export const normalizeEmbeddingText = normalizeText;
-export const embeddingContentHash = contentHashFor;
+export const normalizeEmbeddingText = normalizeText
+export const embeddingContentHash = contentHashFor

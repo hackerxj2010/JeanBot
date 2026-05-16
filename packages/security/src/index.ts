@@ -1,5 +1,5 @@
-import type { RiskLevel, ToolDescriptor } from "@jeanbot/types";
-import crypto from "node:crypto";
+import type { RiskLevel, ToolDescriptor } from "@jeanbot/types"
+import crypto from "node:crypto"
 
 const criticalTerms = [
   "delete",
@@ -8,65 +8,75 @@ const criticalTerms = [
   "payment",
   "production",
   "invoice",
-  "email send"
-] as const;
+  "email send",
+] as const
 
-const highTerms = ["deploy", "publish", "backup", "restore", "credentials"] as const;
+const highTerms = ["deploy", "publish", "backup", "restore", "credentials"] as const
 
 export const riskFromText = (text: string): RiskLevel => {
-  const normalized = text.toLowerCase();
+  const normalized = text.toLowerCase()
   if (criticalTerms.some((term) => normalized.includes(term))) {
-    return "critical";
+    return "critical"
   }
 
   if (highTerms.some((term) => normalized.includes(term))) {
-    return "high";
+    return "high"
   }
 
   if (normalized.includes("monitor") || normalized.includes("analyze")) {
-    return "medium";
+    return "medium"
   }
 
-  return "low";
-};
+  return "low"
+}
 
 export const redactSecrets = (input: string) => {
   return input
     .replace(/sk-[A-Za-z0-9_-]+/g, "[REDACTED_OPENAI_KEY]")
     .replace(/AIza[A-Za-z0-9_-]+/g, "[REDACTED_GOOGLE_KEY]")
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]");
-};
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/g, "Bearer [REDACTED_TOKEN]")
+}
 
-export const ensureLeastPrivilege = (
-  tool: ToolDescriptor,
-  requestedPermissions: string[]
-) => {
-    return requestedPermissions.every((permission) => tool.permissions.includes(permission));
-};
+export const ensureLeastPrivilege = (tool: ToolDescriptor, requestedPermissions: string[]) => {
+  return requestedPermissions.every((permission) => tool.permissions.includes(permission))
+}
+
+let memoizedEncryptionKey: Buffer | undefined
+let lastSecret: string | undefined
 
 const encryptionKey = () => {
-  const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
-};
+  const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key"
+  if (memoizedEncryptionKey && secret === lastSecret) {
+    return memoizedEncryptionKey
+  }
+
+  // @ts-ignore - crypto.hash is available in Node 22
+  const key = crypto.hash
+    ? crypto.hash("sha256", secret, "buffer")
+    : crypto.createHash("sha256").update(secret).digest()
+  memoizedEncryptionKey = key
+  lastSecret = secret
+  return key
+}
 
 export const encryptSecret = (plaintext: string) => {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
-  const tag = cipher.getAuthTag();
-  return Buffer.concat([iv, tag, encrypted]).toString("base64");
-};
+  const iv = crypto.randomBytes(12)
+  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv)
+  const encrypted = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()])
+  const tag = cipher.getAuthTag()
+  return Buffer.concat([iv, tag, encrypted]).toString("base64")
+}
 
 export const decryptSecret = (ciphertext: string | undefined) => {
   if (!ciphertext) {
-    return undefined;
+    return undefined
   }
 
-  const payload = Buffer.from(ciphertext, "base64");
-  const iv = payload.subarray(0, 12);
-  const tag = payload.subarray(12, 28);
-  const body = payload.subarray(28);
-  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8");
-};
+  const payload = Buffer.from(ciphertext, "base64")
+  const iv = payload.subarray(0, 12)
+  const tag = payload.subarray(12, 28)
+  const body = payload.subarray(28)
+  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), iv)
+  decipher.setAuthTag(tag)
+  return Buffer.concat([decipher.update(body), decipher.final()]).toString("utf8")
+}
