@@ -94,7 +94,15 @@ export class TerminalService {
   private resolveCwd(cwd: string) {
     const resolved = path.resolve(cwd);
     const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
+    const projectRoot = path.resolve(".");
+
+    const relativeAllowed = path.relative(allowedRoot, resolved);
+    const isUnderAllowed = !relativeAllowed.startsWith("..") && !path.isAbsolute(relativeAllowed);
+
+    const relativeProject = path.relative(projectRoot, resolved);
+    const isUnderProject = !relativeProject.startsWith("..") && !path.isAbsolute(relativeProject);
+
+    if (!isUnderAllowed && !isUnderProject) {
       throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
     }
 
@@ -102,8 +110,11 @@ export class TerminalService {
   }
 
   private assertSafeCommand(command: string) {
+    const boundaryStart = "(?:^|[\\s;&|])";
+    const boundaryEnd = "(?:[\\s;&|]|$)";
+
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
+      new RegExp(`${boundaryStart}rm\\s+-rf\\s+/${boundaryEnd}`, "i"),
       /\bshutdown\b/i,
       /\breboot\b/i,
       /\bformat\b/i,
