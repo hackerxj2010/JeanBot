@@ -131,6 +131,26 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    async def plan_mission(self, mission_payload: dict[str, Any]) -> dict[str, Any]:
+        bundle = self.build_bundle(mission_payload)
+        record = bundle.record
+        plan = record.plan
+
+        return {
+            "mission_id": record.objective.id,
+            "title": record.objective.title,
+            "objective": record.objective.objective,
+            "summary": plan.summary if plan else "",
+            "steps": [
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "capability": step.capability,
+                }
+                for step in (plan.steps if plan else [])
+            ],
+        }
+
     async def finalize_distributed_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
         bundle.record.active_execution = self._build_active_execution(mission_payload)
@@ -206,6 +226,7 @@ class MissionExecutorService:
         steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
+            summary=mission_payload.get("summary", ""),
             steps=steps,
         )
 

@@ -21,6 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
 
+    plan_parser = subparsers.add_parser("plan", help="Plan a mission without executing")
+    plan_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
+    plan_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
         help="Finalize a distributed mission payload with active_execution",
@@ -36,81 +40,164 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-async def run_shell(args: argparse.Namespace):
-    try:
-        import readline  # Enable history and line editing
-    except ImportError:
-        pass
+class InteractiveShell:
+    def __init__(self, args: argparse.Namespace):
+        self.args = args
+        self.service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
+        self.history: list[str] = []
+        self.last_result = None
+        self.missions: list[Any] = []
+        self.session_id = f"shell-{uuid.uuid4().hex[:8]}"
 
-    service = MissionExecutorService(workspace_root=args.workspace_root, mode=args.mode)
-    print(f"JeanBot interactive shell ({args.mode} mode)")
-    print(f"Workspace: {args.workspace_root} ({args.workspace_id})")
-    print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
-
-    last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
-    history: list[str] = []
-
-    while True:
+    async def run(self):
         try:
-            line = input("\njeanbot> ").strip()
-            if not line:
-                continue
-            if line.lower() in ("exit", "quit"):
-                break
+            import readline  # Enable history and line editing
+        except ImportError:
+            pass
 
-            history.append(line)
+        print(f"JeanBot interactive shell ({self.args.mode} mode)")
+        print(f"Workspace: {self.args.workspace_root} ({self.args.workspace_id})")
+        print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
-            if line.lower() == "help":
-                print("Commands:")
-                print("  help              Show this help")
-                print("  history           Show command history")
-                print("  exit | quit       Exit shell")
-                print("  <objective>       Plan and execute a mission")
-                print("  refine <feedback> Refine the last mission result with feedback")
-                continue
-
-            if line.lower() == "history":
-                for i, cmd in enumerate(history, 1):
-                    print(f"  {i:3}  {cmd}")
-                continue
-
-            if line.lower().startswith("refine "):
-                if not last_result:
-                    print("Nothing to refine. Run a mission first.")
+        while True:
+            try:
+                line = input("\njeanbot> ").strip()
+                if not line:
                     continue
-                feedback = line[7:].strip()
-                objective = (
-                    f"Refine previous mission results based on: {feedback}\n"
-                    f"Previous summary: {last_result.verification_summary}"
-                )
-                title = f"Refinement: {feedback[:30]}..."
-            else:
-                objective = line
-                title = f"Mission: {line[:30]}..."
+                if line.lower() in ("exit", "quit"):
+                    break
 
-            payload = {
-                "mission_id": mission_id,
-                "workspace_id": args.workspace_id,
-                "title": title,
-                "objective": objective,
-                "mode": args.mode,
-            }
+                self.history.append(line)
 
-            print(f"Executing: {title}")
-            last_result = await service.execute_payload(payload)
+                if line.lower() == "help":
+                    self._show_help()
+                    continue
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
-            if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
-                for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+                if line.lower() == "history":
+                    self._show_history()
+                    continue
 
-        except KeyboardInterrupt:
-            print("\nInterrupt received, type 'exit' to quit.")
-        except Exception as e:
-            print(f"\nError: {e}")
+                if line.lower() == "status":
+                    self._show_status()
+                    continue
+
+                if line.lower() == "artifacts":
+                    self._show_artifacts()
+                    continue
+
+                if line.lower().startswith("plan "):
+                    await self._handle_plan_command(line[5:].strip())
+                    continue
+
+                if line.lower().startswith("refine "):
+                    await self._handle_refine(line[7:].strip())
+                    continue
+
+                # Default: plan and execute mission
+                await self._handle_mission(line)
+
+            except KeyboardInterrupt:
+                print("\nInterrupt received, type 'exit' to quit.")
+            except Exception as e:
+                print(f"\nError: {e}")
+
+    def _show_help(self):
+        print("Commands:")
+        print("  help              Show this help")
+        print("  history           Show command history")
+        print("  status            Show status of the last mission")
+        print("  artifacts         Show artifacts from the last mission")
+        print("  plan <objective>  Show plan for an objective without executing")
+        print("  exit | quit       Exit shell")
+        print("  <objective>       Plan and execute a mission")
+        print("  refine <feedback> Refine the last mission result with feedback")
+
+    def _show_history(self):
+        for i, cmd in enumerate(self.history, 1):
+            print(f"  {i:3}  {cmd}")
+
+    def _show_status(self):
+        if not self.last_result:
+            print("No mission has been executed yet.")
+            return
+
+        res = self.last_result
+        print(f"Last Mission: {res.mission_id}")
+        print(f"Status: {res.status}")
+        print(f"Verification: {res.verification_summary}")
+        if res.metrics:
+            print("Metrics:")
+            for k, v in res.metrics.items():
+                print(f"  - {k}: {v}")
+        print(f"Artifacts: {len(res.artifacts)}")
+
+    def _show_artifacts(self):
+        if not self.last_result:
+            print("No mission has been executed yet.")
+            return
+
+        if not self.last_result.artifacts:
+            print("No artifacts found for the last mission.")
+            return
+
+        print(f"Artifacts for mission {self.last_result.mission_id}:")
+        for artifact in self.last_result.artifacts:
+            print(f"  - {artifact.title} ({artifact.kind}): {artifact.path}")
+
+    async def _handle_plan_command(self, objective: str):
+        payload = {
+            "workspace_id": self.args.workspace_id,
+            "title": f"Plan: {objective[:30]}...",
+            "objective": objective,
+        }
+        print(f"Planning: {objective}")
+        plan_summary = await self.service.plan_mission(payload)
+        print(f"\nPlan Summary: {plan_summary['summary']}")
+        print("Steps:")
+        for step in plan_summary["steps"]:
+            print(f"  [{step['id']}] {step['title']} ({step['capability']})")
+
+    async def _handle_refine(self, feedback: str):
+        if not self.last_result:
+            print("Nothing to refine. Run a mission first.")
+            return
+
+        objective = (
+            f"Refine previous mission results based on: {feedback}\n"
+            f"Previous summary: {self.last_result.verification_summary}"
+        )
+        title = f"Refinement: {feedback[:30]}..."
+        await self._execute_mission(title, objective)
+
+    async def _handle_mission(self, objective: str):
+        title = f"Mission: {objective[:30]}..."
+        await self._execute_mission(title, objective)
+
+    async def _execute_mission(self, title: str, objective: str):
+        payload = {
+            "mission_id": self.session_id,
+            "workspace_id": self.args.workspace_id,
+            "title": title,
+            "objective": objective,
+            "mode": self.args.mode,
+        }
+
+        print(f"Executing: {title}")
+        result = await self.service.execute_payload(payload)
+        self.last_result = result
+        self.missions.append(result)
+
+        print(f"\nStatus: {result.status}")
+        print(f"Summary: {result.verification_summary}")
+        if result.artifacts:
+            print(f"Artifacts: {len(result.artifacts)}")
+            for artifact in result.artifacts:
+                print(f"  - {artifact.title}: {artifact.path}")
+
+
+async def run_shell(args: argparse.Namespace):
+    shell = InteractiveShell(args)
+    await shell.run()
 
 
 async def run_command(args: argparse.Namespace) -> dict:
@@ -127,20 +214,38 @@ async def run_command(args: argparse.Namespace) -> dict:
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)
+        return {
+            "command": args.command,
+            "mission_id": result.mission_id,
+            "status": result.status,
+            "execution_mode": result.execution_mode,
+            "verification_summary": result.verification_summary,
+            "artifact_count": len(result.artifacts),
+            "step_count": len(result.step_reports),
+        }
+    elif args.command == "plan":
+        result = await service.plan_mission(payload)
+        return {
+            "command": args.command,
+            "mission_id": result["mission_id"],
+            "title": result["title"],
+            "summary": result["summary"],
+            "step_count": len(result["steps"]),
+            "steps": result["steps"],
+        }
     elif args.command == "finalize-distributed":
         result = await service.finalize_distributed_payload(payload)
+        return {
+            "command": args.command,
+            "mission_id": result.mission_id,
+            "status": result.status,
+            "execution_mode": result.execution_mode,
+            "verification_summary": result.verification_summary,
+            "artifact_count": len(result.artifacts),
+            "step_count": len(result.step_reports),
+        }
     else:
         raise ValueError(f"Unsupported command: {args.command}")
-
-    return {
-        "command": args.command,
-        "mission_id": result.mission_id,
-        "status": result.status,
-        "execution_mode": result.execution_mode,
-        "verification_summary": result.verification_summary,
-        "artifact_count": len(result.artifacts),
-        "step_count": len(result.step_reports),
-    }
 
 
 def main(argv: Sequence[str] | None = None) -> int:
