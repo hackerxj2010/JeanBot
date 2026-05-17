@@ -360,6 +360,22 @@ class MissionExecutorService:
             "finished_at": result.finished_at,
         }
 
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def list_missions(self) -> list[str]:
+        missions_dir = Path(self.workspace_root) / ".jeanbot" / "missions"
+        if not missions_dir.exists():
+            return []
+        return sorted([d.name for d in missions_dir.iterdir() if d.is_dir()], reverse=True)
+
+    def get_last_mission_id(self) -> str | None:
+        missions = self.list_missions()
+        return missions[0] if missions else None
+
     def _mission_dir(self, mission_id: str) -> Path:
         return ensure_directory(Path(self.workspace_root) / ".jeanbot" / "missions" / mission_id)
 
