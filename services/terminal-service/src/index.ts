@@ -1,29 +1,29 @@
-import { spawn } from "node:child_process";
-import { open, readFile } from "node:fs/promises";
-import path from "node:path";
+import { spawn } from "node:child_process"
+import { open, readFile } from "node:fs/promises"
+import path from "node:path"
 
-import chokidar, { type FSWatcher } from "chokidar";
-import Fastify from "fastify";
+import chokidar, { type FSWatcher } from "chokidar"
+import Fastify from "fastify"
 
-import { AuditService } from "@jeanbot/audit-service";
-import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents";
-import { createLogger } from "@jeanbot/logger";
+import { AuditService } from "@jeanbot/audit-service"
+import { LocalJsonStore, ensureDirectory } from "@jeanbot/documents"
+import { createLogger } from "@jeanbot/logger"
 import {
   assertInternalRequest,
   authContextFromHeaders,
-  loadPlatformConfig
-} from "@jeanbot/platform";
-import { PolicyService } from "@jeanbot/policy-service";
+  loadPlatformConfig,
+} from "@jeanbot/platform"
+import { PolicyService } from "@jeanbot/policy-service"
 import type {
   ServiceHealth,
   TerminalBackgroundJobRecord,
   TerminalExecutionRecord,
   TerminalRunRequest,
   TerminalWatchRecord,
-  ToolDescriptor
-} from "@jeanbot/types";
+  ToolDescriptor,
+} from "@jeanbot/types"
 
-import { runCommand } from "./exec/command-runner.js";
+import { runCommand } from "./exec/command-runner.js"
 
 const terminalToolDescriptor: ToolDescriptor = {
   id: "terminal.command.run",
@@ -31,98 +31,99 @@ const terminalToolDescriptor: ToolDescriptor = {
   kind: "terminal",
   description: "Run shell commands with directory and command guardrails.",
   permissions: ["execute"],
-  requiresApproval: true
-};
+  requiresApproval: true,
+}
 
 export class TerminalService {
-  private readonly logger = createLogger("terminal-service");
-  private readonly auditService: AuditService;
-  private readonly policyService: PolicyService;
-  private readonly executionStore: LocalJsonStore<TerminalExecutionRecord>;
-  private readonly backgroundStore: LocalJsonStore<TerminalBackgroundJobRecord>;
-  private readonly watchStore: LocalJsonStore<TerminalWatchRecord>;
-  private readonly watchers = new Map<string, FSWatcher>();
-  private resolvedMode: "pty" | "spawn" = "spawn";
+  private readonly logger = createLogger("terminal-service")
+  private readonly auditService: AuditService
+  private readonly policyService: PolicyService
+  private readonly executionStore: LocalJsonStore<TerminalExecutionRecord>
+  private readonly backgroundStore: LocalJsonStore<TerminalBackgroundJobRecord>
+  private readonly watchStore: LocalJsonStore<TerminalWatchRecord>
+  private readonly watchers = new Map<string, FSWatcher>()
+  private resolvedMode: "pty" | "spawn" = "spawn"
 
-  constructor(
-    auditService = new AuditService(),
-    policyService = new PolicyService()
-  ) {
-    this.auditService = auditService;
-    this.policyService = policyService;
+  constructor(auditService = new AuditService(), policyService = new PolicyService()) {
+    this.auditService = auditService
+    this.policyService = policyService
 
-    const runtimeRoot = path.resolve("tmp", "runtime", "terminal");
+    const runtimeRoot = path.resolve("tmp", "runtime", "terminal")
     this.executionStore = new LocalJsonStore<TerminalExecutionRecord>(
-      ensureDirectory(path.join(runtimeRoot, "executions"))
-    );
+      ensureDirectory(path.join(runtimeRoot, "executions")),
+    )
     this.backgroundStore = new LocalJsonStore<TerminalBackgroundJobRecord>(
-      ensureDirectory(path.join(runtimeRoot, "background"))
-    );
+      ensureDirectory(path.join(runtimeRoot, "background")),
+    )
     this.watchStore = new LocalJsonStore<TerminalWatchRecord>(
-      ensureDirectory(path.join(runtimeRoot, "watches"))
-    );
+      ensureDirectory(path.join(runtimeRoot, "watches")),
+    )
   }
 
   private workspaceRoot() {
-    return path.resolve(process.env.JEANBOT_ALLOWED_WORKSPACE_ROOT ?? "workspace");
+    return path.resolve(process.env.JEANBOT_ALLOWED_WORKSPACE_ROOT ?? "workspace")
   }
 
   private terminalRoot(workspaceId: string) {
-    return path.resolve("tmp", "runtime", "terminal", "workspaces", workspaceId);
+    return path.resolve("tmp", "runtime", "terminal", "workspaces", workspaceId)
   }
 
   private async ensureWorkspaceDirectories(workspaceId: string) {
-    const root = this.terminalRoot(workspaceId);
-    const logRoot = path.join(root, "logs");
-    await Promise.all([
-      ensureDirectory(root),
-      ensureDirectory(logRoot)
-    ]);
+    const root = this.terminalRoot(workspaceId)
+    const logRoot = path.join(root, "logs")
+    await Promise.all([ensureDirectory(root), ensureDirectory(logRoot)])
     return {
       root,
-      logRoot
-    };
+      logRoot,
+    }
   }
 
   private normalizeTimeout(timeoutMs?: number | undefined) {
-    const parsed = typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-      ? timeoutMs
-      : 15_000;
-    return Math.max(1_000, Math.min(parsed, 60_000));
+    const parsed = typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? timeoutMs : 15_000
+    return Math.max(1_000, Math.min(parsed, 60_000))
   }
 
   private resolveCwd(cwd: string) {
-    const resolved = path.resolve(cwd);
-    const allowedRoot = this.workspaceRoot();
-    if (!resolved.startsWith(allowedRoot) && !resolved.startsWith(path.resolve("."))) {
-      throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`);
+    const resolved = path.resolve(cwd)
+    const allowedRoot = this.workspaceRoot()
+    const projectRoot = path.resolve(".")
+
+    const isInside = (root: string, target: string) => {
+      const relative = path.relative(root, target)
+      return !relative.startsWith("..") && !path.isAbsolute(relative)
     }
 
-    return resolved;
+    if (!isInside(allowedRoot, resolved) && !isInside(projectRoot, resolved)) {
+      throw new Error(`Terminal cwd "${resolved}" is outside the allowed workspace root.`)
+    }
+
+    return resolved
   }
 
   private assertSafeCommand(command: string) {
+    const boundaryPrefix = "(?:^|[\\s;&|])"
+    const boundarySuffix = "(?:[\\s;&|]|$)"
     const blockedPatterns = [
-      /\brm\s+-rf\s+\/\b/i,
-      /\bshutdown\b/i,
-      /\breboot\b/i,
-      /\bformat\b/i,
-      /\bdel\s+\/f\s+\/s\s+\/q\b/i,
-      /\bmkfs\b/i,
-      /\bdiskpart\b/i
-    ];
-    const matched = blockedPatterns.find((pattern) => pattern.test(command));
+      new RegExp(`${boundaryPrefix}rm\\s+-rf\\s+/${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}shutdown${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}reboot${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}format${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}del\\s+/f\\s+/s\\s+/q${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}mkfs${boundarySuffix}`, "i"),
+      new RegExp(`${boundaryPrefix}diskpart${boundarySuffix}`, "i"),
+    ]
+    const matched = blockedPatterns.find((pattern) => pattern.test(command))
     if (matched) {
-      throw new Error(`Blocked terminal command pattern "${matched.source}".`);
+      throw new Error(`Blocked terminal command pattern "${matched.source}".`)
     }
   }
 
   private buildExecutionRecord(
     input: TerminalRunRequest,
     cwd: string,
-    approvalRequired: boolean
+    approvalRequired: boolean,
   ): TerminalExecutionRecord {
-    const timestamp = new Date().toISOString();
+    const timestamp = new Date().toISOString()
     return {
       id: crypto.randomUUID(),
       workspaceId: input.workspaceId,
@@ -134,96 +135,103 @@ export class TerminalService {
       startedAt: timestamp,
       approvalRequired,
       requestedBy: input.requestedBy,
-      outputPreview: ""
-    };
+      outputPreview: "",
+    }
   }
 
   private async logFilesForExecution(workspaceId: string, executionId: string) {
-    const { logRoot } = await this.ensureWorkspaceDirectories(workspaceId);
+    const { logRoot } = await this.ensureWorkspaceDirectories(workspaceId)
     return {
       stdoutPath: path.join(logRoot, `${executionId}.stdout.log`),
-      stderrPath: path.join(logRoot, `${executionId}.stderr.log`)
-    };
+      stderrPath: path.join(logRoot, `${executionId}.stderr.log`),
+    }
   }
 
   private async persistExecution(record: TerminalExecutionRecord) {
-    this.executionStore.write(record.id, record);
-    return record;
+    this.executionStore.write(record.id, record)
+    return record
   }
 
   private async updateExecutionOutput(
     record: TerminalExecutionRecord,
     stdout: string,
-    stderr: string
+    stderr: string,
   ) {
-    const { stdoutPath, stderrPath } = await this.logFilesForExecution(record.workspaceId, record.id);
+    const { stdoutPath, stderrPath } = await this.logFilesForExecution(
+      record.workspaceId,
+      record.id,
+    )
     await Promise.all([
-      open(stdoutPath, "w").then((handle) => handle.writeFile(stdout, "utf8").finally(() => handle.close())),
-      open(stderrPath, "w").then((handle) => handle.writeFile(stderr, "utf8").finally(() => handle.close()))
-    ]);
+      open(stdoutPath, "w").then((handle) =>
+        handle.writeFile(stdout, "utf8").finally(() => handle.close()),
+      ),
+      open(stderrPath, "w").then((handle) =>
+        handle.writeFile(stderr, "utf8").finally(() => handle.close()),
+      ),
+    ])
 
     return {
       ...record,
       stdoutPath,
       stderrPath,
-      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400)
-    };
+      outputPreview: [stdout.trim(), stderr.trim()].filter(Boolean).join("\n").slice(0, 400),
+    }
   }
 
   private async runViaPty(command: string, cwd: string, timeoutMs: number) {
     try {
-      const nodePty = await import("node-pty");
-      const isWindows = process.platform === "win32";
-      const executable = isWindows ? "powershell.exe" : "bash";
-      const args = isWindows ? ["-NoProfile"] : ["-lc"];
+      const nodePty = await import("node-pty")
+      const isWindows = process.platform === "win32"
+      const executable = isWindows ? "powershell.exe" : "bash"
+      const args = isWindows ? ["-NoProfile"] : ["-lc"]
       const pty = nodePty.spawn(executable, args, {
         cwd,
         env: process.env as Record<string, string>,
         cols: 120,
-        rows: 30
-      });
+        rows: 30,
+      })
 
-      this.resolvedMode = "pty";
-      let stdout = "";
-      let settled = false;
+      this.resolvedMode = "pty"
+      let stdout = ""
+      let settled = false
 
       return await new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(
         (resolve, reject) => {
           const timer = setTimeout(() => {
             if (settled) {
-              return;
+              return
             }
 
-            settled = true;
-            pty.kill();
-            reject(new Error(`Command timed out after ${timeoutMs}ms.`));
-          }, timeoutMs);
+            settled = true
+            pty.kill()
+            reject(new Error(`Command timed out after ${timeoutMs}ms.`))
+          }, timeoutMs)
 
           pty.onData((chunk) => {
-            stdout += chunk;
-          });
+            stdout += chunk
+          })
 
           pty.onExit(({ exitCode }) => {
             if (settled) {
-              return;
+              return
             }
 
-            settled = true;
-            clearTimeout(timer);
+            settled = true
+            clearTimeout(timer)
             resolve({
               stdout,
               stderr: "",
-              exitCode
-            });
-          });
+              exitCode,
+            })
+          })
 
-          pty.write(`${command}${isWindows ? "\r" : "\n"}`);
-          pty.write(`exit${isWindows ? "\r" : "\n"}`);
-        }
-      );
+          pty.write(`${command}${isWindows ? "\r" : "\n"}`)
+          pty.write(`exit${isWindows ? "\r" : "\n"}`)
+        },
+      )
     } catch {
-      this.resolvedMode = "spawn";
-      return runCommand(command, cwd, timeoutMs);
+      this.resolvedMode = "spawn"
+      return runCommand(command, cwd, timeoutMs)
     }
   }
 
@@ -231,44 +239,44 @@ export class TerminalService {
     kind: string,
     entityId: string,
     actor: string,
-    details: Record<string, unknown>
+    details: Record<string, unknown>,
   ) {
-    await this.auditService.record(kind, entityId, actor, details);
+    await this.auditService.record(kind, entityId, actor, details)
   }
 
   async run(input: TerminalRunRequest) {
-    this.assertSafeCommand(input.command);
-    const safeCwd = this.resolveCwd(input.cwd ?? process.cwd());
-    const timeoutMs = this.normalizeTimeout(input.timeoutMs);
-    const decision = this.policyService.evaluateTool(terminalToolDescriptor, input.command);
-    const actor = input.requestedBy ?? "terminal-service";
+    this.assertSafeCommand(input.command)
+    const safeCwd = this.resolveCwd(input.cwd ?? process.cwd())
+    const timeoutMs = this.normalizeTimeout(input.timeoutMs)
+    const decision = this.policyService.evaluateTool(terminalToolDescriptor, input.command)
+    const actor = input.requestedBy ?? "terminal-service"
     const running = await this.persistExecution(
-      this.buildExecutionRecord(input, safeCwd, decision.approvalRequired)
-    );
+      this.buildExecutionRecord(input, safeCwd, decision.approvalRequired),
+    )
 
     this.logger.info("Running terminal command", {
       executionId: running.id,
       workspaceId: running.workspaceId,
       cwd: safeCwd,
       timeoutMs,
-      approvalRequired: decision.approvalRequired
-    });
+      approvalRequired: decision.approvalRequired,
+    })
 
     try {
       const result =
         process.env.JEANBOT_TERMINAL_MODE === "pty"
           ? await this.runViaPty(input.command, safeCwd, timeoutMs)
-          : await runCommand(input.command, safeCwd, timeoutMs);
+          : await runCommand(input.command, safeCwd, timeoutMs)
 
-      const withOutput = await this.updateExecutionOutput(running, result.stdout, result.stderr);
+      const withOutput = await this.updateExecutionOutput(running, result.stdout, result.stderr)
       const finished: TerminalExecutionRecord = {
         ...withOutput,
         mode: this.resolvedMode,
         status: result.exitCode === 0 ? "completed" : "failed",
         finishedAt: new Date().toISOString(),
         exitCode: result.exitCode,
-        error: result.exitCode === 0 ? undefined : "Command exited with a non-zero status."
-      };
+        error: result.exitCode === 0 ? undefined : "Command exited with a non-zero status.",
+      }
 
       await Promise.all([
         this.persistExecution(finished),
@@ -279,26 +287,26 @@ export class TerminalService {
           timeoutMs,
           exitCode: finished.exitCode,
           status: finished.status,
-          approvalRequired: finished.approvalRequired
-        })
-      ]);
+          approvalRequired: finished.approvalRequired,
+        }),
+      ])
 
       return {
         record: finished,
         stdout: result.stdout,
-        stderr: result.stderr
-      };
+        stderr: result.stderr,
+      }
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      const withOutput = await this.updateExecutionOutput(running, "", message);
+      const message = error instanceof Error ? error.message : String(error)
+      const withOutput = await this.updateExecutionOutput(running, "", message)
       const failed: TerminalExecutionRecord = {
         ...withOutput,
         mode: this.resolvedMode,
         status: message.includes("timed out") ? "timed_out" : "failed",
         finishedAt: new Date().toISOString(),
         exitCode: null,
-        error: message
-      };
+        error: message,
+      }
 
       await Promise.all([
         this.persistExecution(failed),
@@ -309,45 +317,45 @@ export class TerminalService {
           timeoutMs,
           status: failed.status,
           error: failed.error,
-          approvalRequired: failed.approvalRequired
-        })
-      ]);
+          approvalRequired: failed.approvalRequired,
+        }),
+      ])
 
       return {
         record: failed,
         stdout: "",
-        stderr: message
-      };
+        stderr: message,
+      }
     }
   }
 
   private shellExecutable() {
-    const isWindows = process.platform === "win32";
+    const isWindows = process.platform === "win32"
     return {
       command: isWindows ? "powershell.exe" : "bash",
-      args: isWindows ? ["-NoProfile", "-Command"] : ["-lc"]
-    };
+      args: isWindows ? ["-NoProfile", "-Command"] : ["-lc"],
+    }
   }
 
   async runBackground(input: TerminalRunRequest) {
-    this.assertSafeCommand(input.command);
-    const safeCwd = this.resolveCwd(input.cwd ?? process.cwd());
-    const actor = input.requestedBy ?? "terminal-service";
+    this.assertSafeCommand(input.command)
+    const safeCwd = this.resolveCwd(input.cwd ?? process.cwd())
+    const actor = input.requestedBy ?? "terminal-service"
     const { stdoutPath, stderrPath } = await this.logFilesForExecution(
       input.workspaceId,
-      crypto.randomUUID()
-    );
-    const { command, args } = this.shellExecutable();
-    const stdoutHandle = await open(stdoutPath, "w");
-    const stderrHandle = await open(stderrPath, "w");
+      crypto.randomUUID(),
+    )
+    const { command, args } = this.shellExecutable()
+    const stdoutHandle = await open(stdoutPath, "w")
+    const stderrHandle = await open(stderrPath, "w")
     const child = spawn(command, [...args, input.command], {
       cwd: safeCwd,
       env: process.env,
       detached: true,
-      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd]
-    });
+      stdio: ["ignore", stdoutHandle.fd, stderrHandle.fd],
+    })
 
-    child.unref();
+    child.unref()
 
     const record: TerminalBackgroundJobRecord = {
       id: crypto.randomUUID(),
@@ -359,10 +367,10 @@ export class TerminalService {
       stdoutPath,
       stderrPath,
       pid: child.pid ?? undefined,
-      status: "running"
-    };
+      status: "running",
+    }
 
-    this.backgroundStore.write(record.id, record);
+    this.backgroundStore.write(record.id, record)
     await Promise.all([
       stdoutHandle.close(),
       stderrHandle.close(),
@@ -372,104 +380,100 @@ export class TerminalService {
         cwd: record.cwd,
         stdoutPath: record.stdoutPath,
         stderrPath: record.stderrPath,
-        pid: record.pid
-      })
-    ]);
+        pid: record.pid,
+      }),
+    ])
 
     child.on("close", (exitCode) => {
       const next: TerminalBackgroundJobRecord = {
         ...record,
-        status: exitCode === 0 ? "completed" : "failed"
-      };
-      this.backgroundStore.write(record.id, next);
-    });
+        status: exitCode === 0 ? "completed" : "failed",
+      }
+      this.backgroundStore.write(record.id, next)
+    })
 
-    return record;
+    return record
   }
 
   async listExecutions(workspaceId?: string) {
     const executions = this.executionStore
       .list()
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
     return workspaceId
       ? executions.filter((execution) => execution.workspaceId === workspaceId)
-      : executions;
+      : executions
   }
 
   async getExecution(executionId: string) {
-    return this.executionStore.read(executionId);
+    return this.executionStore.read(executionId)
   }
 
   async readExecutionOutput(executionId: string) {
-    const execution = this.executionStore.read(executionId);
+    const execution = this.executionStore.read(executionId)
     if (!execution) {
-      return undefined;
+      return undefined
     }
 
     const [stdout, stderr] = await Promise.all([
       execution.stdoutPath ? readFile(execution.stdoutPath, "utf8").catch(() => "") : "",
-      execution.stderrPath ? readFile(execution.stderrPath, "utf8").catch(() => "") : ""
-    ]);
+      execution.stderrPath ? readFile(execution.stderrPath, "utf8").catch(() => "") : "",
+    ])
 
     return {
       executionId,
       stdout,
-      stderr
-    };
+      stderr,
+    }
   }
 
   async listBackgroundJobs(workspaceId?: string) {
     const jobs = this.backgroundStore
       .list()
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    return workspaceId ? jobs.filter((job) => job.workspaceId === workspaceId) : jobs;
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    return workspaceId ? jobs.filter((job) => job.workspaceId === workspaceId) : jobs
   }
 
-  async watchWorkspace(
-    workspaceId: string,
-    cwd: string,
-    requestedBy?: string | undefined
-  ) {
-    const safeCwd = this.resolveCwd(cwd);
-    const existing = this.watchers.get(safeCwd);
+  async watchWorkspace(workspaceId: string, cwd: string, requestedBy?: string | undefined) {
+    const safeCwd = this.resolveCwd(cwd)
+    const existing = this.watchers.get(safeCwd)
     if (existing) {
       return {
         cwd: safeCwd,
-        active: true
-      };
+        active: true,
+      }
     }
 
     const watcher = chokidar.watch(safeCwd, {
       ignoreInitial: true,
-      depth: 4
-    });
-    this.watchers.set(safeCwd, watcher);
+      depth: 4,
+    })
+    this.watchers.set(safeCwd, watcher)
 
     const record: TerminalWatchRecord = {
       id: crypto.randomUUID(),
       workspaceId,
       cwd: safeCwd,
       createdAt: new Date().toISOString(),
-      requestedBy
-    };
+      requestedBy,
+    }
 
-    this.watchStore.write(record.id, record);
+    this.watchStore.write(record.id, record)
     await this.appendAudit("terminal.watch.started", record.id, requestedBy ?? "terminal-service", {
       workspaceId,
-      cwd: safeCwd
-    });
+      cwd: safeCwd,
+    })
 
     return {
       cwd: safeCwd,
-      active: true
-    };
+      active: true,
+    }
   }
 
   async listWatches(workspaceId?: string) {
     const records = this.watchStore
       .list()
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-    return workspaceId ? records.filter((record) => record.workspaceId === workspaceId) : records;
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt))
+    return workspaceId ? records.filter((record) => record.workspaceId === workspaceId) : records
   }
 
   health(): ServiceHealth {
@@ -479,111 +483,111 @@ export class TerminalService {
       details: {
         mode: this.resolvedMode,
         activeWatchers: this.watchers.size,
-        backgroundJobs: this.backgroundStore.list().length
-      }
-    };
+        backgroundJobs: this.backgroundStore.list().length,
+      },
+    }
   }
 }
 
 export const buildTerminalServiceApp = () => {
-  const app = Fastify();
-  const service = new TerminalService();
-  const config = loadPlatformConfig();
+  const app = Fastify()
+  const service = new TerminalService()
+  const config = loadPlatformConfig()
 
   app.get("/health", async () => ({
     ok: true,
-    service: service.health()
-  }));
+    service: service.health(),
+  }))
 
   app.post("/internal/terminal/run", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
+      config.internalServiceToken,
+    )
     const authContext = authContextFromHeaders(
-      request.headers as Record<string, string | string[] | undefined>
-    );
-    const body = request.body as TerminalRunRequest;
+      request.headers as Record<string, string | string[] | undefined>,
+    )
+    const body = request.body as TerminalRunRequest
     return service.run({
       ...body,
-      requestedBy: body.requestedBy ?? authContext?.userId
-    });
-  });
+      requestedBy: body.requestedBy ?? authContext?.userId,
+    })
+  })
 
   app.post("/internal/terminal/background", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
+      config.internalServiceToken,
+    )
     const authContext = authContextFromHeaders(
-      request.headers as Record<string, string | string[] | undefined>
-    );
-    const body = request.body as TerminalRunRequest;
+      request.headers as Record<string, string | string[] | undefined>,
+    )
+    const body = request.body as TerminalRunRequest
     return service.runBackground({
       ...body,
-      requestedBy: body.requestedBy ?? authContext?.userId
-    });
-  });
+      requestedBy: body.requestedBy ?? authContext?.userId,
+    })
+  })
 
   app.get("/internal/terminal/executions", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
-    const query = (request.query ?? {}) as { workspaceId?: string };
-    return service.listExecutions(query.workspaceId);
-  });
+      config.internalServiceToken,
+    )
+    const query = (request.query ?? {}) as { workspaceId?: string }
+    return service.listExecutions(query.workspaceId)
+  })
 
   app.get("/internal/terminal/executions/:executionId", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
-    const params = request.params as { executionId: string };
-    return service.getExecution(params.executionId);
-  });
+      config.internalServiceToken,
+    )
+    const params = request.params as { executionId: string }
+    return service.getExecution(params.executionId)
+  })
 
   app.get("/internal/terminal/executions/:executionId/output", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
-    const params = request.params as { executionId: string };
-    return service.readExecutionOutput(params.executionId);
-  });
+      config.internalServiceToken,
+    )
+    const params = request.params as { executionId: string }
+    return service.readExecutionOutput(params.executionId)
+  })
 
   app.get("/internal/terminal/background", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
-    const query = (request.query ?? {}) as { workspaceId?: string };
-    return service.listBackgroundJobs(query.workspaceId);
-  });
+      config.internalServiceToken,
+    )
+    const query = (request.query ?? {}) as { workspaceId?: string }
+    return service.listBackgroundJobs(query.workspaceId)
+  })
 
   app.post("/internal/terminal/watch", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
+      config.internalServiceToken,
+    )
     const authContext = authContextFromHeaders(
-      request.headers as Record<string, string | string[] | undefined>
-    );
-    const body = request.body as { workspaceId: string; cwd: string };
-    return service.watchWorkspace(body.workspaceId, body.cwd, authContext?.userId);
-  });
+      request.headers as Record<string, string | string[] | undefined>,
+    )
+    const body = request.body as { workspaceId: string; cwd: string }
+    return service.watchWorkspace(body.workspaceId, body.cwd, authContext?.userId)
+  })
 
   app.get("/internal/terminal/watches", async (request) => {
     assertInternalRequest(
       request.headers as Record<string, string | string[] | undefined>,
-      config.internalServiceToken
-    );
-    const query = (request.query ?? {}) as { workspaceId?: string };
-    return service.listWatches(query.workspaceId);
-  });
+      config.internalServiceToken,
+    )
+    const query = (request.query ?? {}) as { workspaceId?: string }
+    return service.listWatches(query.workspaceId)
+  })
 
   return {
     app,
-    service
-  };
-};
+    service,
+  }
+}
