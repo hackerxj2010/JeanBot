@@ -202,8 +202,20 @@ export const assertInternalRequest = (
   headers: Record<string, string | string[] | undefined>,
   token = loadPlatformConfig().internalServiceToken
 ) => {
-  const internalToken = headers["x-jeanbot-internal-token"];
-  if (!internalToken || internalToken !== token) {
+  const header = headers["x-jeanbot-internal-token"];
+  const internalToken = Array.isArray(header) ? header[0] : header;
+
+  if (!internalToken) {
+    throw new Error("Unauthorized internal service request.");
+  }
+
+  const tokenBuffer = Buffer.from(token, "utf8");
+  const internalTokenBuffer = Buffer.from(internalToken, "utf8");
+
+  if (
+    tokenBuffer.length !== internalTokenBuffer.length ||
+    !crypto.timingSafeEqual(tokenBuffer, internalTokenBuffer)
+  ) {
     throw new Error("Unauthorized internal service request.");
   }
 };

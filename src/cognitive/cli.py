@@ -33,6 +33,10 @@ def build_parser() -> argparse.ArgumentParser:
     shell_parser.add_argument("--workspace-id", default="workspace-interactive", help="Workspace ID")
     shell_parser.add_argument("--mode", choices=["local", "live"], default="local", help="Execution mode")
 
+    status_parser = subparsers.add_parser("status", help="Show status of the last mission")
+    status_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+    status_parser.add_argument("--mission-id", help="Mission ID (defaults to last mission)")
+
     return parser
 
 
@@ -114,6 +118,26 @@ async def run_shell(args: argparse.Namespace):
 
 
 async def run_command(args: argparse.Namespace) -> dict:
+    if args.command == "status":
+        service = MissionExecutorService(workspace_root=args.workspace_root)
+        mission_id = args.mission_id or service.get_last_mission_id()
+        if not mission_id:
+            return {"command": "status", "error": "No missions found."}
+
+        summary = service.get_mission_run_summary(mission_id)
+        if not summary:
+            return {"command": "status", "mission_id": mission_id, "error": "Mission summary not found."}
+
+        return {
+            "command": "status",
+            "mission_id": mission_id,
+            "title": summary.get("mission", {}).get("title"),
+            "status": summary.get("result", {}).get("status"),
+            "verification_summary": summary.get("result", {}).get("verification_summary"),
+            "artifact_count": len(summary.get("artifact_paths", [])),
+            "metrics": summary.get("result", {}).get("metrics"),
+        }
+
     if args.command == "write-template":
         service = MissionExecutorService(workspace_root=".")
         path = service.write_payload_template(args.output)
