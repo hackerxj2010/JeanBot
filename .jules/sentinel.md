@@ -1,0 +1,4 @@
+## 2025-05-15 - [CRITICAL] Terminal Guardrail Bypasses
+**Vulnerability:** Dangerous terminal commands ending in non-word characters (like `/`) bypass regexes using standard word boundaries (`\b`). Path validation using `.startsWith()` is vulnerable to prefix bypasses where directories sharing a name prefix (e.g., 'workspace-secret' vs 'workspace') are incorrectly authorized.
+**Learning:** `\b` matches the position between a word character and a non-word character. If a pattern ends in `/` and the command also ends in `/`, there is no word boundary. `.startsWith()` does not account for directory separators, allowing siblings with similar names.
+**Prevention:** Use robust boundaries like `(?:^|[\s;&|])` and `(?:[\s;&|]|$)` for shell command regexes. Use `path.relative` logic to verify actual directory containment.
