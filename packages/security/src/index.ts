@@ -44,9 +44,19 @@ export const ensureLeastPrivilege = (
     return requestedPermissions.every((permission) => tool.permissions.includes(permission));
 };
 
+let memoizedKey: Buffer | undefined;
+
 const encryptionKey = () => {
+  if (memoizedKey) {
+    return memoizedKey;
+  }
+
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+
+  // @ts-ignore - crypto.hash is available in Node 22+
+  memoizedKey = crypto.hash ? crypto.hash("sha256", secret, "buffer") : crypto.createHash("sha256").update(secret).digest();
+
+  return memoizedKey;
 };
 
 export const encryptSecret = (plaintext: string) => {
