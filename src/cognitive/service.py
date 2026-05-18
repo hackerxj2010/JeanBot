@@ -138,6 +138,73 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    def plan_mission(self, mission_payload: dict[str, Any]) -> dict[str, Any]:
+        bundle = self.build_bundle(mission_payload)
+        plan = bundle.record.plan
+        return {
+            "mission_id": bundle.record.objective.id,
+            "title": bundle.record.objective.title,
+            "objective": bundle.record.objective.objective,
+            "summary": plan.summary if plan else "",
+            "steps": [
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "description": step.description,
+                    "capability": step.capability,
+                    "depends_on": step.depends_on,
+                }
+                for step in (plan.steps if plan else [])
+            ],
+        }
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any]:
+        mission_dir = self._mission_dir(mission_id)
+        run_file = mission_dir / "mission-run.json"
+        if not run_file.exists():
+            raise ValueError(f"Mission run summary not found for {mission_id}")
+        return json.loads(run_file.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any]:
+        mission_dir = self._mission_dir(mission_id)
+        payload_file = mission_dir / "mission-payload.json"
+        if not payload_file.exists():
+            raise ValueError(f"Mission payload not found for {mission_id}")
+        return json.loads(payload_file.read_text(encoding="utf-8"))
+
+    def get_mission_state(self, mission_id: str) -> dict[str, Any]:
+        state_file = Path(self.workspace_root) / ".jeanbot" / "state" / f"mission-{mission_id}.json"
+        if not state_file.exists():
+            return {}
+        return json.loads(state_file.read_text(encoding="utf-8"))
+
+    def list_missions(self) -> list[dict[str, Any]]:
+        missions_dir = Path(self.workspace_root) / ".jeanbot" / "missions"
+        if not missions_dir.exists():
+            return []
+
+        results = []
+        for mission_dir in missions_dir.iterdir():
+            if not mission_dir.is_dir():
+                continue
+            run_file = mission_dir / "mission-run.json"
+            if run_file.exists():
+                try:
+                    data = json.loads(run_file.read_text(encoding="utf-8"))
+                    results.append({
+                        "id": mission_dir.name,
+                        "title": data.get("mission", {}).get("title", "Unknown"),
+                        "status": data.get("result", {}).get("status", "unknown"),
+                        "finished_at": data.get("result", {}).get("finished_at"),
+                    })
+                except Exception:
+                    continue
+        return sorted(results, key=lambda x: x.get("finished_at", ""), reverse=True)
+
+    def get_last_mission_id(self) -> str | None:
+        missions = self.list_missions()
+        return missions[0]["id"] if missions else None
+
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -207,6 +274,7 @@ class MissionExecutorService:
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
             steps=steps,
+            summary=mission_payload.get("summary", f"Plan for {mission_payload['title']}"),
         )
 
     def _build_step(self, index: int, item: dict[str, Any]) -> MissionStep:
