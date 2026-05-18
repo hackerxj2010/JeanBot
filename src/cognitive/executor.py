@@ -71,6 +71,7 @@ class MissionStep:
 class MissionPlan:
     version: int = 1
     steps: list[MissionStep] = field(default_factory=list)
+    summary: str = ""
 
 
 @dataclass
@@ -1153,6 +1154,13 @@ class MissionExecutor:
             record.decision_log.extend(existing_state.get("decision_log", []))
             record.replan_history.extend(existing_state.get("replan_history", []))
 
+            # Restore step statuses
+            step_statuses = existing_state.get("step_statuses", {})
+            if record.plan:
+                for step in record.plan.steps:
+                    if step.id in step_statuses:
+                        step.status = step_statuses[step.id]
+
         started_at = utc_now_iso()
         outputs: dict[str, Any] = {}
         memory_updates: list[str] = []
@@ -1167,6 +1175,10 @@ class MissionExecutor:
             template_by_capability = self._template_by_capability(record)
             self._promote_ready_steps(active_plan.steps)
             self._sync_remaining_steps(record, remaining_steps)
+
+            if not remaining_steps:
+                break
+
             ready_steps = [s for s in active_plan.steps if s.status == "ready"]
             
             if not ready_steps:
@@ -1239,10 +1251,12 @@ class MissionExecutor:
             await self._update_workspace_context(record, context)
 
             # Persist state after each batch for recovery
+            step_statuses = {s.id: s.status for s in active_plan.steps} if active_plan else {}
             await self.file_service.save_mission_state(record.objective.id, {
                 "decision_log": record.decision_log,
                 "replan_history": record.replan_history,
                 "plan_version": record.plan_version,
+                "step_statuses": step_statuses,
             })
 
             await self.audit_service.record(

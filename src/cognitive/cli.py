@@ -48,8 +48,8 @@ async def run_shell(args: argparse.Namespace):
     print("Type 'exit' or 'quit' to end session. Type 'help' for commands.")
 
     last_result = None
-    mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
+    missions: list[dict[str, str]] = []
 
     while True:
         try:
@@ -64,15 +64,63 @@ async def run_shell(args: argparse.Namespace):
             if line.lower() == "help":
                 print("Commands:")
                 print("  help              Show this help")
-                print("  history           Show command history")
+                print("  history           Show command and mission history")
+                print("  plan <objective>  Plan a mission without executing")
+                print("  status [id]       Show status of the last or specific mission")
                 print("  exit | quit       Exit shell")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
                 continue
 
             if line.lower() == "history":
+                print("\nCommand History:")
                 for i, cmd in enumerate(history, 1):
                     print(f"  {i:3}  {cmd}")
+                if missions:
+                    print("\nMission History:")
+                    for m in missions:
+                        print(f"  {m['id']}  {m['title']} ({m['status']})")
+                continue
+
+            if line.lower().startswith("plan "):
+                objective = line[5:].strip()
+                payload = {
+                    "workspace_id": args.workspace_id,
+                    "title": f"Plan: {objective[:30]}...",
+                    "objective": objective,
+                }
+                plan_data = service.plan_mission(payload)
+                print(f"\nMission ID: {plan_data['mission_id']}")
+                print(f"Title: {plan_data['title']}")
+                print(f"Summary: {plan_data['summary']}")
+                print("Steps:")
+                for step in plan_data["steps"]:
+                    deps = f" (depends on: {', '.join(step['depends_on'])})" if step["depends_on"] else ""
+                    print(f"  - [{step['id']}] {step['title']}: {step['description']}{deps}")
+                continue
+
+            if line.lower() == "status" or line.lower().startswith("status "):
+                m_id = line[7:].strip() or (last_result.mission_id if last_result else service.get_last_mission_id())
+                if not m_id:
+                    print("No mission found. Run a mission first or provide an ID.")
+                    continue
+                try:
+                    summary = service.get_mission_run_summary(m_id)
+                    res = summary["result"]
+                    print(f"\nMission ID: {m_id}")
+                    print(f"Title: {summary['mission']['title']}")
+                    print(f"Status: {res['status']}")
+                    print(f"Finished: {res.get('finished_at', 'N/A')}")
+                    print(f"Summary: {res['verification_summary']}")
+                    if res.get("metrics"):
+                        m = res["metrics"]
+                        print(f"Metrics: {m.get('completed_steps')}/{m.get('total_steps')} steps, {m.get('total_artifacts')} artifacts")
+                    if res.get("artifacts"):
+                        print("Artifacts:")
+                        for art in res["artifacts"]:
+                            print(f"  - {art['title']}: {art['path']}")
+                except Exception as e:
+                    print(f"Error retrieving status for {m_id}: {e}")
                 continue
 
             if line.lower().startswith("refine "):
@@ -85,20 +133,28 @@ async def run_shell(args: argparse.Namespace):
                     f"Previous summary: {last_result.verification_summary}"
                 )
                 title = f"Refinement: {feedback[:30]}..."
+                current_mission_id = last_result.mission_id
             else:
                 objective = line
                 title = f"Mission: {line[:30]}..."
+                current_mission_id = f"shell-{uuid.uuid4().hex[:8]}"
 
             payload = {
-                "mission_id": mission_id,
+                "mission_id": current_mission_id,
                 "workspace_id": args.workspace_id,
                 "title": title,
                 "objective": objective,
                 "mode": args.mode,
             }
 
-            print(f"Executing: {title}")
+            print(f"Executing: {title} ({current_mission_id})")
             last_result = await service.execute_payload(payload)
+
+            missions.append({
+                "id": last_result.mission_id,
+                "title": title,
+                "status": last_result.status
+            })
 
             print(f"\nStatus: {last_result.status}")
             print(f"Summary: {last_result.verification_summary}")
