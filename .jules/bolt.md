@@ -1,0 +1,3 @@
+## 2026-05-19 - [Vector operation and hashing optimization]
+**Learning:** Node 22's crypto.hash returns a string by default but can return a Buffer if 'buffer' is passed as the 3rd argument. Math.round(-0.5) returns -0, while (-0.5).toFixed(0) returns -1. Pre-allocating arrays and using manual for loops is significantly faster than Array.from or .map for high-dimensional vectors.
+**Action:** Use crypto.hash with 'buffer' for performance and Buffer-specific methods. Use Math.sign(x) * Math.round(Math.abs(x) * factor) / factor to match toFixed(n) behavior for midpoints if exact matching is required, otherwise standard Math.round is usually sufficient for embeddings.
