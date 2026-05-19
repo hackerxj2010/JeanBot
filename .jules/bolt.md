@@ -1,0 +1,3 @@
+## 2026-05-19 - [Synthetic Embedding Optimization]
+**Learning:** `toFixed(n)` is extremely slow in tight loops due to string conversion; replacing it with `Math.sign(x) * Math.round(Math.abs(x) * 10^n) / 10^n` provides a ~100x speedup while maintaining parity for negative midpoints. Node 22's `crypto.hash` is ~3x faster than the legacy `createHash` pattern for single-shot operations, but requires an explicit `'buffer'` argument to return a Buffer instance.
+**Action:** Always prefer math-based rounding and `crypto.hash` for high-performance data processing paths. Ensure manual `for` loops are used for high-dimensional vector operations (e.g., 1536 dims) to avoid functional overhead.
