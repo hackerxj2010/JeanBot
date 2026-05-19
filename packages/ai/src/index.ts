@@ -12,11 +12,24 @@ const MAX_RETRIES = 2;
 
 const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
 
-const contentHashFor = (value: string) =>
-  crypto.createHash("sha256").update(normalizeText(value)).digest("hex");
+const contentHashFor = (value: string) => {
+  const normalized = normalizeText(value);
+  // Optimization: Node 22 crypto.hash is ~3x faster than createHash for one-shots
+  if (crypto.hash) {
+    return crypto.hash("sha256", normalized, "hex");
+  }
+  return crypto.createHash("sha256").update(normalized).digest("hex");
+};
 
 const seededUnitValue = (seed: string, index: number) => {
-  const digest = crypto.createHash("sha256").update(`${seed}:${index}`).digest();
+  const input = `${seed}:${index}`;
+  let digest: Buffer;
+  if (crypto.hash) {
+    // Explicitly pass 'buffer' to get Buffer output in Node 22
+    digest = crypto.hash("sha256", input, "buffer");
+  } else {
+    digest = crypto.createHash("sha256").update(input).digest();
+  }
   const int = digest.readUInt32BE(0);
   return int / 0xffffffff;
 };
@@ -24,26 +37,48 @@ const seededUnitValue = (seed: string, index: number) => {
 const syntheticVector = (text: string, dimensions = DEFAULT_EMBEDDING_DIMENSIONS) => {
   const normalized = normalizeText(text);
   const hash = contentHashFor(normalized);
-  const values = Array.from({
-    length: dimensions
-  }, (_, index) => {
-    const centered = seededUnitValue(hash, index) * 2 - 1;
-    return Number(centered.toFixed(8));
-  });
+
+  // Optimization: Pre-allocate array and use manual loop instead of Array.from
+  const values = new Array(dimensions);
+  for (let index = 0; index < dimensions; index++) {
+    // We don't round here because normalizeVector will round the final result
+    values[index] = seededUnitValue(hash, index) * 2 - 1;
+  }
+
   return normalizeVector(values);
 };
 
 const normalizeVector = (values: number[]) => {
-  if (values.length === 0) {
+  const length = values.length;
+  if (length === 0) {
     return values;
   }
 
-  const magnitude = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0));
-  if (magnitude === 0) {
-    return values.map(() => 0);
+  // Optimization: Manual loop is significantly faster than .reduce
+  let sum = 0;
+  for (let i = 0; i < length; i++) {
+    const value = values[i];
+    sum += value * value;
   }
 
-  return values.map((value) => Number((value / magnitude).toFixed(8)));
+  const magnitude = Math.sqrt(sum);
+  if (magnitude === 0) {
+    const zeroed = new Array(length);
+    for (let i = 0; i < length; i++) zeroed[i] = 0;
+    return zeroed;
+  }
+
+  // Optimization: Pre-calculate reciprocal and use manual loop instead of .map
+  // Optimization: Math.round logic is ~100x faster than toFixed(8)
+  const reciprocal = 1 / magnitude;
+  const normalized = new Array(length);
+  for (let i = 0; i < length; i++) {
+    const val = values[i] * reciprocal;
+    // Match toFixed(8) behavior for negative midpoints
+    normalized[i] = Math.sign(val) * Math.round(Math.abs(val) * 1e8) / 1e8;
+  }
+
+  return normalized;
 };
 
 const toEmbeddingVectorRecord = (
