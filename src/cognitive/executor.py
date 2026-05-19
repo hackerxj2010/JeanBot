@@ -70,6 +70,7 @@ class MissionStep:
 @dataclass
 class MissionPlan:
     version: int = 1
+    summary: str | None = None
     steps: list[MissionStep] = field(default_factory=list)
 
 
