@@ -21,6 +21,10 @@ def build_parser() -> argparse.ArgumentParser:
     execute_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
     execute_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
 
+    plan_parser = subparsers.add_parser("plan", help="Plan a mission without executing")
+    plan_parser.add_argument("--mission-file", required=True, help="Mission payload JSON file")
+    plan_parser.add_argument("--workspace-root", required=True, help="Workspace root path")
+
     finalize_parser = subparsers.add_parser(
         "finalize-distributed",
         help="Finalize a distributed mission payload with active_execution",
@@ -50,6 +54,7 @@ async def run_shell(args: argparse.Namespace):
     last_result = None
     mission_id = f"shell-{uuid.uuid4().hex[:8]}"
     history: list[str] = []
+    missions: list[dict] = []
 
     while True:
         try:
@@ -65,7 +70,9 @@ async def run_shell(args: argparse.Namespace):
                 print("Commands:")
                 print("  help              Show this help")
                 print("  history           Show command history")
+                print("  status            Show status of missions in this session")
                 print("  exit | quit       Exit shell")
+                print("  plan <objective>  Plan a mission without executing")
                 print("  <objective>       Plan and execute a mission")
                 print("  refine <feedback> Refine the last mission result with feedback")
                 continue
@@ -75,7 +82,23 @@ async def run_shell(args: argparse.Namespace):
                     print(f"  {i:3}  {cmd}")
                 continue
 
-            if line.lower().startswith("refine "):
+            if line.lower() == "status":
+                if not missions:
+                    print("No missions attempted in this session.")
+                    continue
+                for m in reversed(missions):
+                    print(f"\nMission: {m['title']} ({m['id']})")
+                    print(f"  Status: {m.get('status', 'N/A')}")
+                    print(f"  Summary: {m.get('summary', 'N/A')}")
+                    if m.get("artifacts"):
+                        print(f"  Artifacts: {len(m['artifacts'])}")
+                continue
+
+            is_plan_only = line.lower().startswith("plan ")
+            if is_plan_only:
+                objective = line[5:].strip()
+                title = f"Plan: {objective[:30]}..."
+            elif line.lower().startswith("refine "):
                 if not last_result:
                     print("Nothing to refine. Run a mission first.")
                     continue
@@ -89,23 +112,53 @@ async def run_shell(args: argparse.Namespace):
                 objective = line
                 title = f"Mission: {line[:30]}..."
 
+            current_mission_id = (
+                last_result.mission_id
+                if line.lower().startswith("refine ") and last_result
+                else f"shell-{uuid.uuid4().hex[:8]}"
+            )
+
             payload = {
-                "mission_id": mission_id,
+                "mission_id": current_mission_id,
                 "workspace_id": args.workspace_id,
                 "title": title,
                 "objective": objective,
                 "mode": args.mode,
             }
 
-            print(f"Executing: {title}")
-            last_result = await service.execute_payload(payload)
+            if is_plan_only:
+                print(f"Planning: {title}")
+                plan_result = await service.plan_mission(payload)
+                print(f"\nPlan Summary: {plan_result.get('summary', 'N/A')}")
+                for step in plan_result["steps"]:
+                    print(f"  - [{step['capability']}] {step['title']}")
+                continue
 
-            print(f"\nStatus: {last_result.status}")
-            print(f"Summary: {last_result.verification_summary}")
-            if last_result.artifacts:
-                print(f"Artifacts: {len(last_result.artifacts)}")
-                for artifact in last_result.artifacts:
-                    print(f"  - {artifact.title}: {artifact.path}")
+            print(f"Executing: {title}")
+            try:
+                last_result = await service.execute_payload(payload)
+                missions.append({
+                    "id": last_result.mission_id,
+                    "title": title,
+                    "status": last_result.status,
+                    "summary": last_result.verification_summary,
+                    "artifacts": [a.path for a in last_result.artifacts]
+                })
+
+                print(f"\nStatus: {last_result.status}")
+                print(f"Summary: {last_result.verification_summary}")
+                if last_result.artifacts:
+                    print(f"Artifacts: {len(last_result.artifacts)}")
+                    for artifact in last_result.artifacts:
+                        print(f"  - {artifact.title}: {artifact.path}")
+            except Exception as e:
+                missions.append({
+                    "id": payload["mission_id"],
+                    "title": title,
+                    "status": "failed",
+                    "summary": str(e)
+                })
+                print(f"\nExecution failed: {e}")
 
         except KeyboardInterrupt:
             print("\nInterrupt received, type 'exit' to quit.")
@@ -127,6 +180,15 @@ async def run_command(args: argparse.Namespace) -> dict:
     payload = service.load_payload(args.mission_file)
     if args.command == "execute":
         result = await service.execute_payload(payload)
+    elif args.command == "plan":
+        result_dict = await service.plan_mission(payload)
+        return {
+            "command": "plan",
+            "mission_id": result_dict["mission_id"],
+            "title": result_dict["title"],
+            "summary": result_dict["summary"],
+            "step_count": len(result_dict["steps"]),
+        }
     elif args.command == "finalize-distributed":
         result = await service.finalize_distributed_payload(payload)
     else:

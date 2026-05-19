@@ -125,11 +125,61 @@ class MissionExecutorService:
             policy_service=policy_service,
         )
 
+    async def plan_mission(self, mission_payload: dict[str, Any]) -> dict[str, Any]:
+        bundle = self.build_bundle(mission_payload)
+        plan = bundle.record.plan
+
+        # If live mode, we could eventually call an external planning service here
+        # For now, we ensure a summary is present if the plan was auto-generated
+        if plan and not plan.summary:
+            plan.summary = f"Plan generated for objective: {bundle.record.objective.objective[:100]}..."
+
+        return {
+            "mission_id": bundle.record.objective.id,
+            "title": bundle.record.objective.title,
+            "summary": plan.summary if plan else None,
+            "steps": [
+                {
+                    "id": step.id,
+                    "title": step.title,
+                    "description": step.description,
+                    "capability": step.capability,
+                }
+                for step in (plan.steps if plan else [])
+            ],
+        }
+
     async def execute_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
         result = await bundle.executor.execute(bundle.record, bundle.context)
         self._persist_run_summary(bundle, result)
         return result
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any] | None:
+        path = self._mission_dir(mission_id) / "mission-payload.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    async def get_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        file_service = LocalFileService(output_root=self.workspace_root)
+        return await file_service.load_mission_state(mission_id)
+
+    def list_missions(self) -> list[str]:
+        root = Path(self.workspace_root) / ".jeanbot" / "missions"
+        if not root.exists():
+            return []
+        return sorted([d.name for d in root.iterdir() if d.is_dir()], reverse=True)
+
+    def get_last_mission_id(self) -> str | None:
+        missions = self.list_missions()
+        return missions[0] if missions else None
 
     async def finalize_distributed_payload(self, mission_payload: dict[str, Any]) -> MissionRunResult:
         bundle = self.build_bundle(mission_payload)
@@ -206,6 +256,7 @@ class MissionExecutorService:
         steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
+            summary=mission_payload.get("summary"),
             steps=steps,
         )
 
