@@ -138,6 +138,55 @@ class MissionExecutorService:
         self._persist_run_summary(bundle, result)
         return result
 
+    def plan_mission(self, mission_payload: dict[str, Any]) -> MissionPlan:
+        plan = self._build_plan(mission_payload)
+        if not plan.summary:
+            plan.summary = f"Plan for objective: {mission_payload.get('objective', 'Unknown')}"
+        return plan
+
+    def get_mission_run_summary(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        path = mission_dir / "mission-run.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_payload(self, mission_id: str) -> dict[str, Any] | None:
+        mission_dir = self._mission_dir(mission_id)
+        path = mission_dir / "mission-payload.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def get_mission_state(self, mission_id: str) -> dict[str, Any] | None:
+        path = Path(self.workspace_root) / ".jeanbot" / "state" / f"mission-{mission_id}.json"
+        if not path.exists():
+            return None
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def list_missions(self) -> list[dict[str, Any]]:
+        missions_dir = Path(self.workspace_root) / ".jeanbot" / "missions"
+        if not missions_dir.exists():
+            return []
+
+        results = []
+        for mission_dir in missions_dir.iterdir():
+            if not mission_dir.is_dir():
+                continue
+            summary = self.get_mission_run_summary(mission_dir.name)
+            if summary:
+                results.append({
+                    "mission_id": mission_dir.name,
+                    "title": summary.get("mission", {}).get("title"),
+                    "status": summary.get("result", {}).get("status"),
+                    "started_at": summary.get("result", {}).get("started_at"),
+                })
+        return sorted(results, key=lambda x: x.get("started_at", ""), reverse=True)
+
+    def get_last_mission_id(self) -> str | None:
+        missions = self.list_missions()
+        return missions[0]["mission_id"] if missions else None
+
     def load_payload(self, path: str) -> dict[str, Any]:
         return json.loads(Path(path).read_text(encoding="utf-8"))
 
@@ -206,6 +255,7 @@ class MissionExecutorService:
         steps = [self._build_step(index, item) for index, item in enumerate(raw_steps, start=1)]
         return MissionPlan(
             version=int(mission_payload.get("plan_version", mission_payload.get("planVersion", 1))),
+            summary=mission_payload.get("summary", ""),
             steps=steps,
         )
 

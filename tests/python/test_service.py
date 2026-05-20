@@ -98,6 +98,51 @@ class MissionExecutorServiceTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(result.execution_mode, "distributed")
             self.assertEqual([report.step_id for report in result.step_reports], ["step-a", "step-b"])
 
+    async def test_plan_mission_generates_summary(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = MissionExecutorService(workspace_root=tmpdir)
+            payload = {
+                "objective": "Test planning",
+            }
+            plan = service.plan_mission(payload)
+            self.assertEqual(plan.summary, "Plan for objective: Test planning")
+            self.assertTrue(len(plan.steps) > 0)
+
+    async def test_mission_retrieval_methods(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            service = MissionExecutorService(workspace_root=tmpdir)
+            payload = {
+                "workspace_id": "ws-retrieval",
+                "title": "Retrieval Test",
+                "objective": "Verify retrieval methods",
+            }
+
+            result = await service.execute_payload(payload)
+            m_id = result.mission_id
+
+            # Test get_last_mission_id
+            self.assertEqual(service.get_last_mission_id(), m_id)
+
+            # Test list_missions
+            missions = service.list_missions()
+            self.assertEqual(len(missions), 1)
+            self.assertEqual(missions[0]["mission_id"], m_id)
+
+            # Test get_mission_run_summary
+            summary = service.get_mission_run_summary(m_id)
+            self.assertIsNotNone(summary)
+            self.assertEqual(summary["mission"]["title"], "Retrieval Test")
+
+            # Test get_mission_payload
+            saved_payload = service.get_mission_payload(m_id)
+            self.assertIsNotNone(saved_payload)
+            self.assertEqual(saved_payload["title"], "Retrieval Test")
+
+            # Test get_mission_state
+            state = service.get_mission_state(m_id)
+            self.assertIsNotNone(state)
+            self.assertIn("plan_version", state)
+
 
 class MissionExecutorCliTests(unittest.TestCase):
     def test_cli_write_template_and_execute(self):
