@@ -1,0 +1,3 @@
+## 2025-05-20 - [Rounding and Crypto Performance in AI Vectors]
+**Learning:** `Number(x.toFixed(n))` is significantly slower (~300x) than mathematical rounding using `Math.round`. Also, Node 22's `crypto.hash` is ~40% faster than the legacy `createHash().update().digest()` pattern for single-shot hashing. `crypto.hash` returns a `Buffer` if 'buffer' encoding is requested in Node 22, but may return a `Uint8Array` in other environments or future versions, so using `DataView` or checking for `readUInt32BE` is safer.
+**Action:** Use `fastRound` (Math.round based) for vector normalization and `crypto.hash` for single-shot operations, with robust return type handling.
