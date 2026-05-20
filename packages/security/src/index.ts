@@ -46,7 +46,10 @@ export const ensureLeastPrivilege = (
 
 const encryptionKey = () => {
   const secret = process.env.JEANBOT_INTEGRATION_ENCRYPTION_KEY ?? "jeanbot-dev-encryption-key";
-  return crypto.createHash("sha256").update(secret).digest();
+  // Optimization: Node 22+ crypto.hash is ~5x faster than createHash for single-shot hashing.
+  return crypto.hash
+    ? crypto.hash("sha256", secret, "buffer")
+    : crypto.createHash("sha256").update(secret).digest();
 };
 
 export const encryptSecret = (plaintext: string) => {
